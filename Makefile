@@ -1,3 +1,7 @@
+# Makefile
+
+# This builds dblink
+
 CXX = g++
 CXXFLAGS = -O3 -D HAVE_LONG_INT_64 -Wall -std=c++11 -shared -Wno-unused-value -D_GLIBCXX_USE_CXX11_ABI=0 -fPIC 
 INCPATH = -I/opt/vertica/sdk/include -I/opt/vertica/sdk/examples/HelperLibraries
