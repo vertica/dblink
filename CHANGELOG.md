@@ -1,3 +1,7 @@
+DBLINK Version 0.2.1 (16 Dec 2022)
+
+* New connection method via ``connect_secret`` SESSION PARAMETER
+
 DBLINK Version 0.2.0 (01 Dec 2022)
 
 * Fixed a bug with database connections being left open

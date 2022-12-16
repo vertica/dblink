@@ -1,16 +1,3 @@
-// (c) Copyright [2022-2023] Micro Focus or one of its affiliates.
-// Licensed under the Apache License, Version 2.0 (the "License");
-// You may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 // vim:ru:scs:si:sm:sw=4:sta:ts=4:tw=0
 #include "Vertica.h"
 #include "StringParsers.h"
@@ -438,9 +425,16 @@ class DBLinkFactory : public TransformFunctionFactory
 
 		// Read Params:
 		ParamReader params = srvInterface.getParamReader();
-		if( params.containsParameter("cid") ) {
+		if( params.containsParameter("cid") ) {				// Start checking "cid" param
 			cid = params.getStringRef("cid").str() ;
-		} else if( params.containsParameter("connect") ) {
+		} else if( params.containsParameter("connect") ) {	// if "cid" is undef try with "connect"
+			connect = true ;
+			cid = params.getStringRef("connect").str() ;
+		} else if (srvInterface.getUDSessionParamReader("library").containsParameter("connect_secret")) {
+															// if both "cid" and "connect" are not defined try "connect_secret" session
+			connect = true ;
+			cid = srvInterface.getUDSessionParamReader("library").getStringRef("connect_secret").str() ;
+		} else if( params.containsParameter("connect") ) {	
 			connect = true ;
 			cid = params.getStringRef("connect").str() ;
 		} else {
@@ -658,7 +652,7 @@ RegisterFactory(DBLinkFactory);
 RegisterLibrary (
 	"Maurizio Felici",
 	__DATE__,
-	"0.2.0",
+	"0.2.1",
 	"11.1.1",
 	"maurizio.felici@vertica.com",
 	"DBLINK: run SQL on other databases",

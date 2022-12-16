@@ -14,6 +14,7 @@ deploy: $(UDXLIB)
 	    CREATE OR REPLACE LIBRARY $(UDXLIBNAME) AS '$(UDXLIB)' LANGUAGE 'C++'; \
 	    CREATE OR REPLACE TRANSFORM FUNCTION dblink AS LANGUAGE 'C++' NAME 'DBLinkFactory' LIBRARY $(UDXLIBNAME) ; \
 		GRANT EXECUTE ON TRANSFORM FUNCTION dblink() TO PUBLIC ; \
+		GRANT USAGE ON LIBRARY ldblink TO PUBLIC ; \
 	" | vsql -U dbadmin  -X -f - -e
 clean:
 	@echo " \

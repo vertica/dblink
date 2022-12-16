@@ -141,6 +141,51 @@ pgdb:UID=mauro;PWD=xxx;DSN=pmf
 myver:UID=mauro;PWD=xxx;DSN=vmf
 mysql:USER=mauro;PASSWORD=xxx;DSN=mmf
 ```
+### Alternative connection definition methods
+As we have seen in the previous section we can define multiple "Connection Identifiers" in the "Connection Identifier Database" file which is located by default in ``/usr/local/etc/dblinks.cids`` and then use the ``cid`` parameter to pick our connection:
+
+```sql
+SELECT DBLINK(USING PARAMETERS cid='myconnecction', query=...) ...
+```
+
+There are other methods you can use to define the connection parameters. The **first alternative** is to define all parameters using ``connect``:
+
+```sql
+SELECT DBLINK(USING PARAMETERS connect='UID=mauro;PWD=secret;...', query=...) ...
+```
+
+This way you don't have to create a the dblink.cids database however defining the connection parameters in the command line is not safe (all queries are recorded under ``v_monitor.query_requests``.
+
+The **second alternative** is to save the connection in your own file (accessible from all nodes in the cluster):
+
+```
+$ cat /tmp/myconnection.txt
+UID=mauro;PWD=secret;...
+```
+
+And then use:
+
+```sql
+SELECT DBLINK(USING PARAMETERS connect='@/tmp/myconnection.txt', query=...) ...
+```
+Please note the first character of the parameter is ``@``.
+
+The **third alternative** is to use the SESSION PARAMETER ``connect_secret`` this way:
+
+```sql
+ALTER SESSION SET UDPARAMETER FOR ldblink connect_secret = 'UID=mauro;PWD=secret;...' ;
+SELECT DBLINK(USING PARAMETERS query='my first query') ...
+SELECT DBLINK(USING PARAMETERS query='my second query') ...
+SELECT DBLINK(USING PARAMETERS query='my third query') ...
+```
+
+The value for this SESSION PARAMETER won't be recorded in ``query_requests`` and is "session-scoped" (when the session ends the session parameter will disappear).
+
+This is the order of precedence of the connection definitions in DBLINK():
+
+1. if the ``cid`` parameter is defined all the others will be ignored
+2. if ``cid`` is not defined DBLINK will try to use ``connect``
+3. if neither ``cid`` nor ``connect`` are defined DBLINK will try to use ``connect_secret`` session parameter.
 
 ## How to configure the ODBC Layer
 
