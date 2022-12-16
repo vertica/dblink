@@ -438,9 +438,16 @@ class DBLinkFactory : public TransformFunctionFactory
 
 		// Read Params:
 		ParamReader params = srvInterface.getParamReader();
-		if( params.containsParameter("cid") ) {
+		if( params.containsParameter("cid") ) {				// Start checking "cid" param
 			cid = params.getStringRef("cid").str() ;
-		} else if( params.containsParameter("connect") ) {
+		} else if( params.containsParameter("connect") ) {	// if "cid" is undef try with "connect"
+			connect = true ;
+			cid = params.getStringRef("connect").str() ;
+		} else if (srvInterface.getUDSessionParamReader("library").containsParameter("connect_secret")) {
+															// if both "cid" and "connect" are not defined try "connect_secret" session
+			connect = true ;
+			cid = srvInterface.getUDSessionParamReader("library").getStringRef("connect_secret").str() ;
+		} else if( params.containsParameter("connect") ) {	
 			connect = true ;
 			cid = params.getStringRef("connect").str() ;
 		} else {

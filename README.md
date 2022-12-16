@@ -170,6 +170,51 @@ pgdb:UID=mauro;PWD=xxx;DSN=pmf
 myver:UID=mauro;PWD=xxx;DSN=vmf
 mysql:USER=mauro;PASSWORD=xxx;DSN=mmf
 ```
+### Alternative connection definition methods
+As we have seen in the previous section we can define multiple "Connection Identifiers" in the "Connection Identifier Database" file which is located by default in ``/usr/local/etc/dblinks.cids`` and then use the ``cid`` parameter to pick our connection:
+
+```sql
+SELECT DBLINK(USING PARAMETERS cid='myconnecction', query=...) ...
+```
+
+There are other methods you can use to define the connection parameters. The **first alternative** is to define all parameters using ``connect``:
+
+```sql
+SELECT DBLINK(USING PARAMETERS connect='UID=mauro;PWD=secret;...', query=...) ...
+```
+
+This way you don't have to create a the dblink.cids database however defining the connection parameters in the command line is not safe (all queries are recorded under ``v_monitor.query_requests``.
+
+The **second alternative** is to save the connection in your own file (accessible from all nodes in the cluster):
+
+```
+$ cat /tmp/myconnection.txt
+UID=mauro;PWD=secret;...
+```
+
+And then use:
+
+```sql
+SELECT DBLINK(USING PARAMETERS connect='@/tmp/myconnection.txt', query=...) ...
+```
+Please note the first character of the parameter is ``@``.
+
+The **third alternative** is to use the SESSION PARAMETER ``connect_secret`` this way:
+
+```sql
+ALTER SESSION SET UDPARAMETER FOR ldblink connect_secret = 'UID=mauro;PWD=secret;...' ;
+SELECT DBLINK(USING PARAMETERS query='my first query') ...
+SELECT DBLINK(USING PARAMETERS query='my second query') ...
+SELECT DBLINK(USING PARAMETERS query='my third query') ...
+```
+
+The value for this SESSION PARAMETER won't be recorded in ``query_requests`` and is "session-scoped" (when the session ends the session parameter will disappear).
+
+This is the order of precedence of the connection definitions in DBLINK():
+
+1. if the ``cid`` parameter is defined all the others will be ignored
+2. if ``cid`` is not defined DBLINK will try to use ``connect``
+3. if neither ``cid`` nor ``connect`` are defined DBLINK will try to use ``connect_secret`` session parameter.
 
 ## Configure the ODBC Layer
 
@@ -254,18 +299,14 @@ Driver=/usr/lib64/libmyodbc8a.so
 UsageCount=1
 ```
 
-## Report an issue
+## How to report an issue
+Please report issues as follows:
 
-To report an issue, provide following information:
-
-- The command that you ran and the associated output as shown on your screen by using the standard Vertica SQL client `vsql`.
-- Vertica version: `SELECT VERSION();`.
-- `DBLINK` library metadata by running statement the following as dbadmin:
-   ```
-   => SELECT * FROM USER_LIBRARIES WHERE lib_name = 'ldblink';
-   ```
-- Attach the following ODBC configuration files:
-	- `odbc.ini` (please remove passwords or other confidential information)
-	- `odbcinst.ini`
-- ODBC Driver Manager version and configuration. For example, with unixODBC, the output of the command `odbcinst -j`.
-- ODBC traces obtained while running the command (see 1.). To enable the ODBC traces you have to set `Trace = on` in `odbcinst.ini`. Do not forget to switch ODBC tracing off at the end.
+1. Share the command you ran and the associated output as shown on your screen by using the standard Vertica SQL client ``vsql``
+2. Share the Vertica version: ``SELECT VERSION();``
+3. Share the DBLINK library metadata by running (as dbadmin) ``SELECT * FROM USER_LIBRARIES WHERE lib_name = 'ldblink';``
+4. Attach the ODBC configuration files:
+	- ``odbc.ini`` (please remove passwords or other confidential information)
+	- ``odbcinst.ini``
+5. Share the ODBC Driver Manager version and config. For example, with unixODBC, the output of the command ``odbcinst -j``
+6. Share the ODBC traces obtained while running the command (see 1.). To enable the ODBC traces you have to set ``Trace = on`` in ``odbcinst.ini``. Do not forget to switch ODBC tracing off at the end...
