@@ -18,4 +18,4 @@ deploy: $(UDXLIB)
 clean:
 	@echo " \
 	    DROP LIBRARY $(UDXLIBNAME) CASCADE ; \
-	" | vsql -U dbadmin  -X -f - -e
+	" | vsql -U dbadmin  -X -f - -e test
