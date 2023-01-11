@@ -3,6 +3,7 @@
 # usage: make VERTICA_VERSION=<major.minor.patch> OSTAG=<ubuntu|centos>
 #
 
+SHELL=/bin/bash # because WSL defaults to /bin/sh
 VERTICA_SDK_IMAGE=vertica/verticasdk:$(OSTAG)-v$(VERTICA_VERSION)
 LOCAL_IMAGE=dblink_builder:$(OSTAG)-v$(VERTICA_VERSION)
 LOCAL_CONTAINER=dblink_builder
