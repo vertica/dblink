@@ -62,3 +62,9 @@ clean: check
 	docker container rm $(LOCAL_CONTAINER) || true
 	docker image rm $(LOCAL_IMAGE) || true
 	#docker image rm $(VERTICA_SDK_IMAGE) || true
+
+# build all versions for release purposes
+release:
+	@for i in $$(curl https://hub.docker.com/v2/namespaces/vertica/repositories/verticasdk/tags | perl -nE 'print join "\n",m/(?:ubuntu|centos)-v\d+\.\d+\.\d+/g') ; do \
+	  $(MAKE) VERTICA_VERSION="$${i##*-v}" OSTAG="$${i%%-v*}" ;\
+	done
