@@ -15,7 +15,10 @@ UDXLIBNAME = ldblink
 UDXLIB = $(UDXLIBNAME).so
 UDXSRC = $(UDXLIBNAME).cpp
 
-$(UDXLIB): $(UDXSRC) container
+$(UDXLIB): $(UDXLIB).$(OSTAG)-v$(VERTICA_VERSION)
+	@ln -snf $< $@
+
+$(UDXLIB).$(OSTAG)-v$(VERTICA_VERSION): $(UDXSRC) container
 	$(CXX) $(CXXFLAGS) $(INCPATH) -o $@ $< $(VERPATH) -lodbc
 
 .PHONY: check
