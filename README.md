@@ -87,9 +87,9 @@ Install and uninstall `DBLINK()` with the repository [Makefile](Makefile).
 
 > Before you run `make` commands, review the Makefile and make changes as needed.
 
-1. Compile the DBLINK source code with `make` and the appropriate Vertica version and Linux distribution. For example, `make VERTICA_VERSION=12.0.2 OSTAG=ubuntu`.
+1. Compile the DBLINK source code for the appropriate Vertica version and Linux distribution. For example, `make VERTICA_VERSION=12.0.2 OSTAG=ubuntu`.
 2. Deploy the library in Vertica as dbadmin with `make install`.
-3. Create a "Connection Identifier Database" (a simple text file) under `/usr/local/etc/dblink.cids` (see "How to configure DBLINK() here below"). You can use a different location by changing the `DBLINK_CIDS` define in the source code. 
+3. Create a [Connection Identifier Database](#connection-identifier-database) (a simple text file) under `/usr/local/etc/dblink.cids`. You can use a different location by changing the `DBLINK_CIDS` define in the source code. 
 
 
 ### Uninstall DBLINK()
