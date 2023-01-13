@@ -1,9 +1,11 @@
+# DBLINK()
+
 `DBLINK()` is a Vertica [User Defined Transform Function](https://www.vertica.com/docs/latest/HTML/Content/Authoring/ExtendingVertica/UDx/TransformFunctions/TransformFunctions.htm) coded in C++ to run SQL against other databases.  
 
 For example, the following statement runs a row count in PostgreSQL and retrieves the result (6,001,215) in Vertica:
 
 ```sql
-SELECT DBLINK(USING PARAMETERS
+=> SELECT DBLINK(USING PARAMETERS
     cid='pgdb', 
     query='SELECT COUNT(*) FROM tpch.lineitem'
 ) OVER();
@@ -25,17 +27,17 @@ count
 The following statement creates a table in Vertica named `public.customer` that contains 10% of randomly selected data from the PostreSQL table `tpch.customer`: 
 
 ```sql
-CREATE TABLE public.customer AS 
+=> CREATE TABLE public.customer AS 
     SELECT DBLINK(USING PARAMETERS 
         cid='pgdb', 
         query='SELECT * FROM tpch.customer WHERE RANDOM() < 0.1') 
 OVER();
 ```
 
-The following statement creates an empty table in Vertica corresponding to the table definition in the remote database:
+This statement creates an empty table in Vertica corresponding to the table definition in the remote database:
 
 ```sql
-CREATE TABLE public.customer AS 
+=> CREATE TABLE public.customer AS 
     SELECT DBLINK(USING PARAMETERS 
         cid='pgdb', 
         query='SELECT * FROM tpch.customer LIMIT 0') 
@@ -45,7 +47,7 @@ OVER();
 This statement will group-by the result of a `JOIN` between the Vertica table `tpch.nation` and the MySQL table `tpch.region`:
  
 ```sql
-SELECT r.r_name, count(*)
+=> SELECT r.r_name, count(*)
 FROM tpch.nation n
     LEFT OUTER JOIN
         ( SELECT DBLINK(USING PARAMETERS
@@ -56,10 +58,10 @@ FROM tpch.nation n
 GROUP BY 1 ;
 ```
 
-The following statement drops a PostgreSQL table if exists:
+This statement drops a PostgreSQL table if exists:
 
 ```sql
-SELECT DBLINK(USING PARAMETERS 
+=> SELECT DBLINK(USING PARAMETERS 
 	cid='pgdb', 
 	query='DROP TABLE IF EXISTS public.t1') OVER();
 ```
@@ -67,7 +69,7 @@ SELECT DBLINK(USING PARAMETERS
 Sometimes the SQL that you want to push to the remote database is quite complex. In these cases, you might find useful to write the SQL in a file using your preferred editor, and then pass the file containing the SQL text to `DBLINK()` using the following syntax:
 
 ```sql
-SELECT DBLINK(USING PARAMETERS 
+=> SELECT DBLINK(USING PARAMETERS 
 	cid='mysql', 
 	query='@/tmp/myscript.sql') OVER()";
 ```
@@ -85,17 +87,20 @@ Install and uninstall `DBLINK()` with the repository [Makefile](Makefile).
 
 ### Install DBLINK()
 
-> Before you run `make` commands, review the Makefile and make changes as needed.
+> Before you run `make` commands, review the [Makefile](Makefile) and make any necessary changes.
 
-1. Compile the DBLINK source code for the appropriate Vertica version and Linux distribution. For example, `make VERTICA_VERSION=12.0.2 OSTAG=ubuntu`.
-2. Deploy the library in Vertica as dbadmin with `make install`.
-3. Create a [Connection Identifier Database](#connection-identifier-database) (a simple text file) under `/usr/local/etc/dblink.cids`. You can use a different location by changing the `DBLINK_CIDS` define in the source code. 
+1. Compile the DBLINK source code with for the appropriate Vertica version and Linux distribution. For example:
+   ```$ make VERTICA_VERSION=12.0.2 OSTAG=ubuntu```
+2. Deploy the library in Vertica as dbadmin:
+   ```$ make install```.
+3. Create a [Connection Identifier Database](#connection-identifier-database) (a simple text file) under `/usr/local/etc/dblink.cids`. You can use a different location by changing the `DBLINK_CIDS` define in the source code.
+   For details, see [Configure DBLINK()](#configure-dblink).
 
 
 ### Uninstall DBLINK()
 You can uninstall the library with `make clean`.
 
-## Using DBLINK()
+## Configure DBLINK()
 
 `DBLINK()` requires two parameters and accepts one optional parameter with the following syntax:
 
@@ -114,7 +119,7 @@ DBLINK(USING PARAMETERS cid=value, query=value[, rowset=value]);
 For example, the following query retrieves data from the remote database 500 rows at a time:
 
 ```sql
-SELECT DBLINK(USING PARAMETERS 
+=> SELECT DBLINK(USING PARAMETERS 
     cid='pgdb', 
     query='SELECT c_custkey, c_nationkey, c_phone FROM tpch.customer ORDER BY 1', 
     rowset=500) OVER();
@@ -131,7 +136,7 @@ SELECT DBLINK(USING PARAMETERS
 ```
 #### Connection Identifier Database
 
-The Connection Identifier Database is a simple text file containing the codes used with ```cid```. This is an example:
+The Connection Identifier Database is a simple text file containing the codes used with ```cid```. For example:
 
 ```
 $ cat dblink.cids 
@@ -240,14 +245,14 @@ UsageCount=1
 
 To report an issue, provide following information:
 
-- Command that you ran and the associated output as shown on your screen by using the standard Vertica SQL client `vsql`.
+- The command that you ran and the associated output as shown on your screen by using the standard Vertica SQL client `vsql`.
 - Vertica version: `SELECT VERSION();`.
 - `DBLINK` library metadata by running statement the following as dbadmin:
    ```
    => SELECT * FROM USER_LIBRARIES WHERE lib_name = 'ldblink';
    ```
-- Attach the ODBC the following configuration files:
+- Attach the following ODBC configuration files:
 	- `odbc.ini` (please remove passwords or other confidential information)
 	- `odbcinst.ini`
-- ODBC Driver Manager version and config. For example, with unixODBC, the output of the command `odbcinst -j`.
+- ODBC Driver Manager version and configuration. For example, with unixODBC, the output of the command `odbcinst -j`.
 - ODBC traces obtained while running the command (see 1.). To enable the ODBC traces you have to set `Trace = on` in `odbcinst.ini`. Do not forget to switch ODBC tracing off at the end.
