@@ -82,10 +82,9 @@ DBLINK() uses ODBC to interact with the remote databases so you will have to ins
 - configure the ODBC layer (see the examples here below)
 
 ### Install DBLINK()
-- First you need to [Setup a C++ Development Environment](https://www.vertica.com/docs/11.1.x/HTML/Content/Authoring/ExtendingVertica/C++/C++SDK.htm) 
-- Then you will have to compile the DBLINK source code: ```make```
-- Deploy the library in Vertica (as dbadmin): ```make deploy```
-- Create a "Connection Identifier Database" (a simple text file) under ```/usr/local/etc/dblink.cids``` (see "How to configure DBLINK() here below"). You can use a different location by changing the ```DBLINK_CIDS``` define in the source code. 
+1. First you need to compile the DBLINK source code for the appropriate Vertica version and Linux distribution: ```make VERTICA_VERSION=12.0.2 OSTAG=ubuntu```
+1. Deploy the library in Vertica (as dbadmin): ```make install```
+1. Create a "Connection Identifier Database" (a simple text file) under ```/usr/local/etc/dblink.cids``` (see "How to configure DBLINK() here below"). You can use a different location by changing the ```DBLINK_CIDS``` define in the source code. 
 
 Please have a look to the Makefile before running ```make``` and change it if needed. 
 
