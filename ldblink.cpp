@@ -655,11 +655,12 @@ class DBLinkFactory : public TransformFunctionFactory
 };
 RegisterFactory(DBLinkFactory);
 
+// older versions of the SDK don't have this defined
 RegisterLibrary (
 	"Maurizio Felici",
 	__DATE__,
-	"0.2.0",
-	"11.1.1",
+	"0.1.0",
+	"12.0.2",
 	"maurizio.felici@vertica.com",
 	"DBLINK: run SQL on other databases",
 	"",
