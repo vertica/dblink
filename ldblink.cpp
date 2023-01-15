@@ -659,7 +659,7 @@ RegisterFactory(DBLinkFactory);
 RegisterLibrary (
 	"Maurizio Felici",
 	__DATE__,
-	"0.1.0",
+	"0.2.1",
 	"12.0.2",
 	"maurizio.felici@vertica.com",
 	"DBLINK: run SQL on other databases",
