@@ -63,7 +63,7 @@ check:
 
 .PHONY: container
 container: check
-	if ! $(DOCKER) image inspect $(LOCAL_IMAGE) >/dev/null 2>&1; then \
+	@if ! $(DOCKER) image inspect $(LOCAL_IMAGE) >/dev/null 2>&1; then \
 	  $(DOCKER) container rm $(LOCAL_CONTAINER) 2>/dev/null ; \
 	  if [[ $(OSTAG) == "centos" ]]; then \
 	    $(DOCKER) run --name $(LOCAL_CONTAINER) -u 0 $(VERTICA_SDK_IMAGE) bash -c "yum install -y unixODBC-devel;" || exit 1; \
