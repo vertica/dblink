@@ -76,7 +76,7 @@ Sometimes the SQL that you want to push to the remote database is quite complex.
 
 ## Installation
 
-Install and uninstall `DBLINK()` with the repository [Makefile](Makefile).
+You can install `DBLINK()` from the latest released binaries without needing to clone this repository.  Or, you can clone the repository and build from source.  Whichever way you chose, ODBC has to be configured on all nodes in order to use `DBLINK()`..
 
 ### Prerequisites
 `DBLINK()` uses ODBC to interact with the remote databases. You must install and configure the following on all nodes in your cluster:
@@ -85,20 +85,33 @@ Install and uninstall `DBLINK()` with the repository [Makefile](Makefile).
 - Specific ODBC Drivers for the remote database that you want to connect to
 - [Configure the ODBC layer](#configure-the-odbc-layer)
 
-### Install DBLINK()
+### Installing pre-built binaries
 
-> Before you run `make` commands, review the [Makefile](Makefile) and make any necessary changes.
+1. Download the appropriate build of ldblink.so from the [latest release](/vertica/dblink/releases) to `ldblink.so`.
+2. Copy `ldblink.so` to the initiator node
+3. Execute this SQL substituting the full path of ldblink.so on the initiator node
+```sql
+	    CREATE OR REPLACE LIBRARY DBLink AS '/full/path/to/ldblink.so' LANGUAGE 'C++';
+	    CREATE OR REPLACE TRANSFORM FUNCTION dblink AS LANGUAGE 'C++' NAME 'DBLinkFactory' LIBRARY DBLink ;
+            GRANT EXECUTE ON TRANSFORM FUNCTION dblink() TO PUBLIC ;
+```
+4. Delete ldblink.so from initiator node (optional)
 
-1. Compile the DBLINK source code with for the appropriate Vertica version and Linux distribution. For example:
-   ```$ make VERTICA_VERSION=12.0.2 OSTAG=ubuntu```
-2. Deploy the library in Vertica as dbadmin:
-   ```$ make install```.
+### Build DBLINK() From Source
+
+Before you run `make` commands, review the [Makefile](Makefile) and make any necessary changes.
+
+1. Compile the DBLINK source code with for the appropriate Vertica version and Linux distribution.
+   - To build using the installed Vertica SDK and devtoolset (centos), just run `make`
+   - To build without needing to set up a build environment, specify the version and target OS.  For example:
+> ```$ make VERTICA_VERSION=12.0.2 OSTAG=ubuntu```
+2. Follow the install proceedures above or use the `install` makefile target to deploy the library in Vertica as dbadmin:
+> ```$ make install```.
 3. Create a [Connection Identifier Database](#connection-identifier-database) (a simple text file) under `/usr/local/etc/dblink.cids`. You can use a different location by changing the `DBLINK_CIDS` define in the source code.
    For details, see [Configure DBLINK()](#configure-dblink).
 
-
 ### Uninstall DBLINK()
-You can uninstall the library with `make clean`.
+You can uninstall the library with `DROP LIBRARAY DBLink` in vsql or by running `make clean`.
 
 ## Configure DBLINK()
 
