@@ -88,14 +88,14 @@ You can install `DBLINK()` from the latest released binaries without needing to 
 ### Installing pre-built binaries
 
 1. Download the appropriate build of ldblink.so from the [latest release](/vertica/dblink/releases) to `ldblink.so`.
-2. Copy `ldblink.so` to the initiator node
-3. Execute this SQL substituting the full path of ldblink.so on the initiator node
+2. Copy `ldblink.so` to the initiator node.
+3. Execute this SQL substituting the full path of ldblink.so on the initiator node:
 ```sql
 	    CREATE OR REPLACE LIBRARY DBLink AS '/full/path/to/ldblink.so' LANGUAGE 'C++';
 	    CREATE OR REPLACE TRANSFORM FUNCTION dblink AS LANGUAGE 'C++' NAME 'DBLinkFactory' LIBRARY DBLink ;
             GRANT EXECUTE ON TRANSFORM FUNCTION dblink() TO PUBLIC ;
 ```
-4. Delete ldblink.so from initiator node (optional)
+4. (optional) Delete ldblink.so from initiator node.
 
 ### Build DBLINK() From Source
 
