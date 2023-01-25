@@ -23,7 +23,7 @@ using namespace std;
 #include <sqlext.h>
 #include <iostream>
 #include <fstream>
-  
+
 #define DBLINK_CIDS			"/usr/local/etc/dblink.cids"	// Default Connection identifiers config file FIX: add a param
 #define MAXCNAMELEN			128								// Max column name length
 #define DEF_ROWSET 			100								// Default rowset
@@ -54,8 +54,8 @@ enum DBs {
 	MYSQL
 };
 
-void clean() {   
-	if ( Odt ) { 
+void clean() {
+	if ( Odt ) {
 		free(Odt) ;
 		Odt = 0 ;
 	}
@@ -63,28 +63,28 @@ void clean() {
 		free(Odd) ;
 		Odd = 0 ;
 	}
-	if ( Ors ) { 
+	if ( Ors ) {
 		free(Ors);
 		Ors = 0 ;
 	}
-	if ( desz ) { 
+	if ( desz ) {
 		free(desz);
 		desz = 0 ;
 	}
 	if ( Ost ) {
-		(void)SQLFreeHandle(SQL_HANDLE_STMT, Ost);     
+		(void)SQLFreeHandle(SQL_HANDLE_STMT, Ost);
 		Ost = 0 ;
 	}
 	if ( Ocon ) {
 		(void)SQLDisconnect(Ocon);
-		(void)SQLFreeHandle(SQL_HANDLE_DBC, Ocon);     
+		(void)SQLFreeHandle(SQL_HANDLE_DBC, Ocon);
 		Ocon = 0 ;
 	}
 	if ( Oenv ) {
-		(void)SQLFreeHandle(SQL_HANDLE_ENV, Oenv);     
+		(void)SQLFreeHandle(SQL_HANDLE_ENV, Oenv);
 		Oenv = 0 ;
 	}
-}   
+}
 
 void ex_err ( SQLSMALLINT htype, SQLHANDLE Oh, int loc , const char *vtext ) {
 	SQLCHAR Oerr_state[6] ;					// ODBC Error State
@@ -101,9 +101,9 @@ void ex_err ( SQLSMALLINT htype, SQLHANDLE Oh, int loc , const char *vtext ) {
 			(SQLSMALLINT)MAX_ODBC_ERROR_LEN, &Oln) ) != SQL_SUCCESS ) {
 		clean();
 		vt_report_error(loc, "DBLINK. %s. Unable to display ODBC error message", vtext);
-	} else {  
+	} else {
 		clean();
-		vt_report_error(loc, "DBLINK. %s. State %s. Native Code %d. Error text: %s%c", 
+		vt_report_error(loc, "DBLINK. %s. State %s. Native Code %d. Error text: %s%c",
 			vtext, (char *)Oerr_state, (int)Oerr_native, (char *) Oerr_text,
 			( Oln > MAX_ODBC_ERROR_LEN ) ? '>' : '.' ) ;
 	}
@@ -128,9 +128,9 @@ class DBLink : public TransformFunction
 
 		// Check the DBMS we are connecting to:
 		if (!SQL_SUCCEEDED(Oret=SQLAllocHandle(SQL_HANDLE_STMT, Ocon, &Ostmt))){
-			ex_err(SQL_HANDLE_DBC, Ocon, 201, "Error allocating Statement Handle"); 
+			ex_err(SQL_HANDLE_DBC, Ocon, 201, "Error allocating Statement Handle");
 		}
-		if (!SQL_SUCCEEDED(Oret=SQLGetInfo(Ocon, SQL_DBMS_NAME,                                                                                                                
+		if (!SQL_SUCCEEDED(Oret=SQLGetInfo(Ocon, SQL_DBMS_NAME,
         	(SQLPOINTER)Obuff, (SQLSMALLINT)sizeof(Obuff), NULL))) {
 			ex_err(SQL_HANDLE_DBC, Ocon, 202, "Error getting remote DBMS Name");
     	}
@@ -139,7 +139,7 @@ class DBLink : public TransformFunction
 		} else {
 			dbt = GENERIC ;
 		}
-        (void)SQLFreeHandle(SQL_HANDLE_STMT, Ostmt);     
+        (void)SQLFreeHandle(SQL_HANDLE_STMT, Ostmt);
 
 		// Read/Set rowset Param:
 		ParamReader params = srvInterface.getParamReader();
@@ -156,19 +156,19 @@ class DBLink : public TransformFunction
 	}
 
     virtual void cancel(ServerInterface &srvInterface)
-    {   
+    {
 		SQLRETURN Oret = 0 ;
 		if ( Ost ) {
 			if (!SQL_SUCCEEDED(Oret=SQLCancel(Ost)))
 				ex_err(SQL_HANDLE_STMT, Ost, 301, "Error canceling SQL statement");
         }
 		clean() ;
-    }   
+    }
 
     virtual void destroy(ServerInterface &srvInterface, const SizedColumnTypes &argTypes)
-    {   
+    {
 		clean() ;
-    }   
+    }
 
     virtual void processPartition(ServerInterface &srvInterface,
                                   PartitionReader & inputReader,
@@ -184,7 +184,7 @@ class DBLink : public TransformFunction
 
 				// Allocate memory for Result Set and length array pointers:
 				Ores = (SQLPOINTER *)srvInterface.allocator->alloc(Oncol * sizeof(SQLPOINTER)) ;
-				Olen = (SQLLEN **)srvInterface.allocator->alloc(Oncol * sizeof(SQLLEN *)) ;        
+				Olen = (SQLLEN **)srvInterface.allocator->alloc(Oncol * sizeof(SQLLEN *)) ;
 
 				// Allocate space for each column and bind it:
 				for ( unsigned int j = 0 ; j < Oncol ; j++ ) {
@@ -194,7 +194,7 @@ class DBLink : public TransformFunction
 						case SQL_INTEGER:
 						case SQL_TINYINT:
 						case SQL_BIGINT:
-							if ( dbt == ORACLE ) 
+							if ( dbt == ORACLE )
 								desz[j] = (size_t)(Ors[j] + 1) ;
 							Ores[j] = (SQLPOINTER)srvInterface.allocator->alloc(desz[j] * rowset);
 							if (!SQL_SUCCEEDED(Oret=SQLBindCol(Ost, j+1, (dbt==ORACLE) ? SQL_C_CHAR : SQL_C_SBIGINT, Ores[j], desz[j], Olen[j]))){
@@ -334,7 +334,7 @@ class DBLink : public TransformFunction
 								case SQL_BINARY:
 								case SQL_VARBINARY:
 								case SQL_LONGVARBINARY:
-									if ( (int)Odl == SQL_NTS ) 
+									if ( (int)Odl == SQL_NTS )
 										Odl = (SQLULEN)strnlen((char *)Odp , desz[j]);
 									outputWriter.getStringRef(j).copy((char *)Odp, Odl ) ;
 									break ;
@@ -440,14 +440,10 @@ class DBLinkFactory : public TransformFunctionFactory
 		ParamReader params = srvInterface.getParamReader();
 		if( params.containsParameter("cid") ) {				// Start checking "cid" param
 			cid = params.getStringRef("cid").str() ;
-		} else if( params.containsParameter("connect") ) {	// if "cid" is undef try with "connect"
+		} else if( params.containsParameter("connect_secret") ) {	// if "cid" is undef try with "connect_secret"
 			connect = true ;
-			cid = params.getStringRef("connect").str() ;
-		} else if (srvInterface.getUDSessionParamReader("library").containsParameter("connect_secret")) {
-															// if both "cid" and "connect" are not defined try "connect_secret" session
-			connect = true ;
-			cid = srvInterface.getUDSessionParamReader("library").getStringRef("connect_secret").str() ;
-		} else if( params.containsParameter("connect") ) {	
+			cid = params.getStringRef("connect_secret").str() ;
+		} else if( params.containsParameter("connect") ) {	        // support the legacy name "connect"
 			connect = true ;
 			cid = params.getStringRef("connect").str() ;
 		} else {
@@ -460,7 +456,7 @@ class DBLinkFactory : public TransformFunctionFactory
 		}
 
 		// Check connection parameters
-		if ( connect ) { 	// old VFQ connect style:
+		if ( connect ) { 	// old VFQ connect style: connect='@/tmp/file.txt' will read CIDs from a different file
 			if ( cid[0] == '@' ) {
 				std::ifstream cids(cid.substr(1)) ;
 				if ( cids.is_open() ) {
@@ -513,13 +509,13 @@ class DBLinkFactory : public TransformFunctionFactory
 
 		// ODBC Connection:
 		if (!SQL_SUCCEEDED(Oret=SQLAllocHandle(SQL_HANDLE_ENV, (SQLHANDLE)SQL_NULL_HANDLE, &Oenv))){
-			ex_err(0, 0, 107, "Error allocating Environment Handle");                                                                                              
+			ex_err(0, 0, 107, "Error allocating Environment Handle");
 		}
 		if (!SQL_SUCCEEDED(Oret=SQLSetEnvAttr(Oenv, SQL_ATTR_ODBC_VERSION, (void *) SQL_OV_ODBC3, 0))){
 			ex_err(0, 0, 108, "Error setting SQL_OV_ODBC3");
 		}
 		if (!SQL_SUCCEEDED(Oret=SQLAllocHandle(SQL_HANDLE_DBC, Oenv, &Ocon))){
-			ex_err(0, 0, 109, "Error allocating Connection Handle");                                                                                              
+			ex_err(0, 0, 109, "Error allocating Connection Handle");
 		}
 		if (!SQL_SUCCEEDED(Oret=SQLDriverConnect(Ocon, NULL, (SQLCHAR *)cid_value.c_str(), SQL_NTS, NULL, 0, NULL, SQL_DRIVER_COMPLETE))){
 			ex_err(SQL_HANDLE_DBC, Ocon, 110, "Error connecting to target database");
@@ -532,7 +528,7 @@ class DBLinkFactory : public TransformFunctionFactory
 
 		// ODBC Statement execution:
 		if (!SQL_SUCCEEDED(Oret=SQLAllocHandle(SQL_HANDLE_STMT, Ocon, &Ost))){
-			ex_err(SQL_HANDLE_DBC, Ocon, 111, "Error allocating Statement Handle");                                                                                              
+			ex_err(SQL_HANDLE_DBC, Ocon, 111, "Error allocating Statement Handle");
 		}
 		if ( is_select ) {
 			if (!SQL_SUCCEEDED(Oret=SQLPrepare(Ost, (SQLCHAR *)query.c_str(), SQL_NTS))) {
@@ -565,7 +561,7 @@ class DBLinkFactory : public TransformFunctionFactory
 					case SQL_INTEGER:
 					case SQL_TINYINT:
 					case SQL_BIGINT:
-						// we change this later on if the remote db is Oracle 
+						// we change this later on if the remote db is Oracle
 						desz[j] = sizeof(vint) ;
 						outputTypes.addInt(cname) ;
 						break ;

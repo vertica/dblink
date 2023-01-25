@@ -1,12 +1,12 @@
 # DBLINK()
 
-`DBLINK()` is a Vertica [User Defined Transform Function](https://www.vertica.com/docs/latest/HTML/Content/Authoring/ExtendingVertica/UDx/TransformFunctions/TransformFunctions.htm) coded in C++ to run SQL against other databases.  
+`DBLINK()` is a Vertica [User Defined Transform Function](https://www.vertica.com/docs/latest/HTML/Content/Authoring/ExtendingVertica/UDx/TransformFunctions/TransformFunctions.htm) coded in C++ to run SQL against other databases.
 
 For example, the following statement runs a row count in PostgreSQL and retrieves the result (6,001,215) in Vertica:
 
 ```sql
 => SELECT DBLINK(USING PARAMETERS
-    cid='pgdb', 
+    cid='pgdb',
     query='SELECT COUNT(*) FROM tpch.lineitem'
 ) OVER();
 count
@@ -24,34 +24,34 @@ count
 
 ### Examples
 
-The following statement creates a table in Vertica named `public.customer` that contains 10% of randomly selected data from the PostreSQL table `tpch.customer`: 
+The following statement creates a table in Vertica named `public.customer` that contains 10% of randomly selected data from the PostreSQL table `tpch.customer`:
 
 ```sql
-=> CREATE TABLE public.customer AS 
-    SELECT DBLINK(USING PARAMETERS 
-        cid='pgdb', 
-        query='SELECT * FROM tpch.customer WHERE RANDOM() < 0.1') 
+=> CREATE TABLE public.customer AS
+    SELECT DBLINK(USING PARAMETERS
+        cid='pgdb',
+        query='SELECT * FROM tpch.customer WHERE RANDOM() < 0.1')
 OVER();
 ```
 
 This statement creates an empty table in Vertica corresponding to the table definition in the remote database:
 
 ```sql
-=> CREATE TABLE public.customer AS 
-    SELECT DBLINK(USING PARAMETERS 
-        cid='pgdb', 
-        query='SELECT * FROM tpch.customer LIMIT 0') 
+=> CREATE TABLE public.customer AS
+    SELECT DBLINK(USING PARAMETERS
+        cid='pgdb',
+        query='SELECT * FROM tpch.customer LIMIT 0')
 OVER();
 ```
 
 This statement will group-by the result of a `JOIN` between the Vertica table `tpch.nation` and the MySQL table `tpch.region`:
- 
+
 ```sql
 => SELECT r.r_name, count(*)
 FROM tpch.nation n
     LEFT OUTER JOIN
         ( SELECT DBLINK(USING PARAMETERS
-            cid='mypg’, 
+            cid='mypg’,
             query='SELECT r_name, r_regionkey FROM tpch.region'
             ) OVER()) r
     ON n.n_regionkey = r.r_regionkey
@@ -61,16 +61,16 @@ GROUP BY 1 ;
 This statement drops a PostgreSQL table if exists:
 
 ```sql
-=> SELECT DBLINK(USING PARAMETERS 
-	cid='pgdb', 
+=> SELECT DBLINK(USING PARAMETERS
+	cid='pgdb',
 	query='DROP TABLE IF EXISTS public.t1') OVER();
 ```
 
 Sometimes the SQL that you want to push to the remote database is quite complex. In these cases, you might find useful to write the SQL in a file using your preferred editor, and then pass the file containing the SQL text to `DBLINK()` using the following syntax:
 
 ```sql
-=> SELECT DBLINK(USING PARAMETERS 
-	cid='mysql', 
+=> SELECT DBLINK(USING PARAMETERS
+	cid='mysql',
 	query='@/tmp/myscript.sql') OVER()";
 ```
 
@@ -132,11 +132,11 @@ DBLINK(USING PARAMETERS cid=value, query=value[, rowset=value]);
 For example, the following query retrieves data from the remote database 500 rows at a time:
 
 ```sql
-=> SELECT DBLINK(USING PARAMETERS 
-    cid='pgdb', 
-    query='SELECT c_custkey, c_nationkey, c_phone FROM tpch.customer ORDER BY 1', 
+=> SELECT DBLINK(USING PARAMETERS
+    cid='pgdb',
+    query='SELECT c_custkey, c_nationkey, c_phone FROM tpch.customer ORDER BY 1',
     rowset=500) OVER();
- c_custkey | c_nationkey |     c_phone     
+ c_custkey | c_nationkey |     c_phone
 -----------+-------------+-----------------
          1 |          15 | 25-989-741-2988
          2 |          13 | 23-768-687-3665
@@ -152,12 +152,12 @@ For example, the following query retrieves data from the remote database 500 row
 The Connection Identifier Database is a simple text file containing the codes used with ```cid```. For example:
 
 ```
-$ cat dblink.cids 
+$ cat dblink.cids
 # Vertica DBLINK Configuration File
 #
 # Connection IDs lines have the following format:
 #    <mnemonic code>:<ODBC configuration>
-# and are terminated by a SINGLE '\n' (ASCII dec 10, ASCII hex 0x0a) 
+# and are terminated by a SINGLE '\n' (ASCII dec 10, ASCII hex 0x0a)
 # Be aware of this! Windows editors might end lines with \r\n. In
 # this case the Carriage Return is considered part of the ODBC config
 # and can cause undefined ODBC Driver Behavior.
@@ -177,44 +177,13 @@ As we have seen in the previous section we can define multiple "Connection Ident
 SELECT DBLINK(USING PARAMETERS cid='myconnecction', query=...) ...
 ```
 
-There are other methods you can use to define the connection parameters. The **first alternative** is to define all parameters using ``connect``:
+There are other methods you can use to define the connection parameters. The **first alternative** is to define all parameters using ``connect_secret``:
 
 ```sql
-SELECT DBLINK(USING PARAMETERS connect='UID=mauro;PWD=secret;...', query=...) ...
+SELECT DBLINK(USING PARAMETERS connect_secret='UID=mauro;PWD=secret;...', query=...) ...
 ```
 
-This way you don't have to create a the dblink.cids database however defining the connection parameters in the command line is not safe (all queries are recorded under ``v_monitor.query_requests``.
-
-The **second alternative** is to save the connection in your own file (accessible from all nodes in the cluster):
-
-```
-$ cat /tmp/myconnection.txt
-UID=mauro;PWD=secret;...
-```
-
-And then use:
-
-```sql
-SELECT DBLINK(USING PARAMETERS connect='@/tmp/myconnection.txt', query=...) ...
-```
-Please note the first character of the parameter is ``@``.
-
-The **third alternative** is to use the SESSION PARAMETER ``connect_secret`` this way:
-
-```sql
-ALTER SESSION SET UDPARAMETER FOR ldblink connect_secret = 'UID=mauro;PWD=secret;...' ;
-SELECT DBLINK(USING PARAMETERS query='my first query') ...
-SELECT DBLINK(USING PARAMETERS query='my second query') ...
-SELECT DBLINK(USING PARAMETERS query='my third query') ...
-```
-
-The value for this SESSION PARAMETER won't be recorded in ``query_requests`` and is "session-scoped" (when the session ends the session parameter will disappear).
-
-This is the order of precedence of the connection definitions in DBLINK():
-
-1. if the ``cid`` parameter is defined all the others will be ignored
-2. if ``cid`` is not defined DBLINK will try to use ``connect``
-3. if neither ``cid`` nor ``connect`` are defined DBLINK will try to use ``connect_secret`` session parameter.
+This way you don't have to create a the dblink.cids database however defining the connection parameters in the command line is not safe before Vertica 12.0.4.  All queries are recorded under ``v_monitor.query_requests`` and in the log file, and that can expose passwords in the ``connect_secret`` parameter.
 
 ## Configure the ODBC Layer
 
