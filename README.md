@@ -268,14 +268,19 @@ Driver=/usr/lib64/libmyodbc8a.so
 UsageCount=1
 ```
 
-## How to report an issue
-Please report issues as follows:
+## Report an issue
 
-1. Share the command you ran and the associated output as shown on your screen by using the standard Vertica SQL client ``vsql``
-2. Share the Vertica version: ``SELECT VERSION();``
-3. Share the DBLINK library metadata by running (as dbadmin) ``SELECT * FROM USER_LIBRARIES WHERE lib_name = 'ldblink';``
-4. Attach the ODBC configuration files:
-	- ``odbc.ini`` (please remove passwords or other confidential information)
-	- ``odbcinst.ini``
-5. Share the ODBC Driver Manager version and config. For example, with unixODBC, the output of the command ``odbcinst -j``
-6. Share the ODBC traces obtained while running the command (see 1.). To enable the ODBC traces you have to set ``Trace = on`` in ``odbcinst.ini``. Do not forget to switch ODBC tracing off at the end...
+To ask a question, start a [discussion](https://github.com/vertica/dblink/discussions/categories/q-a).
+To report an [issue](https://github.com/vertica/dblink/issues), open up an issue and provide following information:
+
+- The command that you ran and the associated output as shown on your screen by using the standard Vertica SQL client `vsql`.
+- Vertica version: `SELECT VERSION();`.
+- `DBLINK` library metadata by running statement the following as dbadmin:
+   ```
+   => SELECT * FROM USER_LIBRARIES WHERE lib_name = 'ldblink';
+   ```
+- Attach the following ODBC configuration files:
+    - `odbc.ini` (please remove passwords or other confidential information)
+    - `odbcinst.ini`
+- ODBC Driver Manager version and configuration. For example, with unixODBC, the output of the command `odbcinst -j`.
+- ODBC traces obtained while running the command (see 1.). To enable the ODBC traces you have to set `Trace = on` in `odbcinst.ini`. Do not forget to switch ODBC tracing off at the end.
