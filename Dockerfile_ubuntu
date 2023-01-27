@@ -1,0 +1,20 @@
+ARG IMAGE
+FROM $IMAGE
+
+USER root
+RUN apt-get update 
+RUN apt-get install -y unixodbc-dev odbc-postgresql
+
+COPY tests/dblink.cids /usr/local/etc/dblink.cids
+COPY tests/odbc.ini /etc/odbc.ini
+COPY tests/odbcinst.ini /etc/odbcinst.ini
+
+RUN wget -q https://dev.mysql.com/get/Downloads/MySQL-8.0/mysql-community-client-plugins_8.0.32-1ubuntu18.04_amd64.deb
+RUN wget -q https://dev.mysql.com/get/Downloads/Connector-ODBC/8.0/mysql-connector-odbc_8.0.32-1ubuntu18.04_amd64.deb
+RUN dpkg -i mysql-community-client-plugins_8.0.32-1ubuntu18.04_amd64.deb mysql-connector-odbc_8.0.32-1ubuntu18.04_amd64.deb
+
+# this just needs to match the odbc.ini file
+RUN mkdir -p /usr/lib64
+RUN ln -snf /usr/lib/x86_64-linux-gnu/odbc/libmyodbc8w.so /usr/lib64/libmyodbc.so
+
+USER dbadmin

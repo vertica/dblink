@@ -14,32 +14,10 @@ docker-compose up -d --force-recreate
 docker exec ${COMPOSE_PROJECT_NAME}_vertica_1 true || (echo docker-compose could not start ${COMPOSE_PROJECT_NAME}_vertica_1 >&2; false)
 
 # clean on exit
-#trap "docker-compose down" EXIT
-
-# set up ODBC first
-# install dblink.cids
-docker cp dblink.cids ${COMPOSE_PROJECT_NAME}_vertica_1:/usr/local/etc/dblink.cids
-#docker-compose exec -u 0 -T vertica tee /usr/local/etc/dblink.cids < dblink.cids >/dev/null
-# install odbc.ini
-docker cp odbc.ini ${COMPOSE_PROJECT_NAME}_vertica_1:/etc/odbc.ini
-docker cp odbcinst.ini ${COMPOSE_PROJECT_NAME}_vertica_1:/etc/odbcinst.ini
-#docker-compose exec -u 0 -T vertica tee /etc/odbc.ini < odbc.ini >/dev/null
+trap "docker-compose down" EXIT
 
 # install dblink
 docker cp ../ldblink.so.${OSTAG}-v${VERTICA_VERSION} ${COMPOSE_PROJECT_NAME}_vertica_1:/tmp/ldblink.so
-
-# install mysql drivers
-if [[ $OSTAG == ubuntu ]]; then
-  docker-compose exec -u 0 vertica wget -q https://dev.mysql.com/get/Downloads/MySQL-8.0/mysql-community-client-plugins_8.0.32-1ubuntu18.04_amd64.deb
-  docker-compose exec -u 0 vertica wget -q https://dev.mysql.com/get/Downloads/Connector-ODBC/8.0/mysql-connector-odbc_8.0.32-1ubuntu18.04_amd64.deb
-  docker-compose exec -u 0 vertica dpkg -i mysql-community-client-plugins_8.0.32-1ubuntu18.04_amd64.deb mysql-connector-odbc_8.0.32-1ubuntu18.04_amd64.deb
-  # this just needs to match the odbc.ini file
-  docker-compose exec -u 0 vertica mkdir -p /usr/lib64
-  docker-compose exec -u 0 vertica ln -snf /usr/lib/x86_64-linux-gnu/odbc/libmyodbc8w.so /usr/lib64/libmyodbc8w.so
-else
-  # this just needs to match the odbc.ini file
-  docker-compose exec -u 0 vertica ln -snf /usr/lib64/libmyodbc5w.so /usr/lib64/libmyodbc8w.so
-fi
 
 echo waiting for vertica to start
 timeout=30
@@ -65,17 +43,35 @@ docker-compose exec mysql mysql --password=password -e "drop database tpch;" >/d
 docker-compose exec mysql mysql db --password=password -e 'create schema tpch;' >/dev/null
 docker-compose exec mysql mysql db --password=password -e 'create table tpch.customer (id int, name varchar(100), birthday date);' >/dev/null
 docker-compose exec mysql mysql db --password=password -e "insert into tpch.customer values (1, 'alice', '1970-01-01');" >/dev/null
-docker-compose exec mysql mysql db --password=password -e "insert into tpch.customer values (1, 'bob', '2022-02-02');" >/dev/null
+docker-compose exec mysql mysql db --password=password -e "insert into tpch.customer values (2, 'bob', '2022-02-02');" >/dev/null
 docker-compose exec mysql mysql db --password=password -e "GRANT ALL PRIVILEGES ON tpch.* TO 'mauro'@'%'" >/dev/null
 
-# read the data in vertica
-output=$(docker-compose exec vertica vsql -X -c \
+function check_output {
+  msg=$1
+  printf "%-50s" "$msg..."
+  output=$2
+  if ! [[ $output =~ id.*alice.*bob ]]; then
+    echo "FAILED"
+    echo "$output"
+    return 1
+  fi
+  echo "ok"
+}
+
+# basic tests to read mysql data in vertica using three different ways of specifying the credentials
+check_output "Connecting with cid" "$(docker-compose exec vertica vsql -X -c \
 "SELECT DBLINK(USING PARAMETERS 
   cid='mysql', 
-    query='select * from tpch.customer') OVER();")
-echo "$output" | grep -- id || ( echo "$output"; false)
-echo "$output" | grep -- ----- || ( echo "$output"; false)
-echo "$output" | grep -- alice || ( echo "$output"; false)
-echo "$output" | grep -- bob || ( echo "$output"; false)
+    query='select * from tpch.customer order by id') OVER();")"
+
+check_output "Connecting with connect_secret" "$(docker-compose exec vertica vsql -X -c \
+"SELECT DBLINK(USING PARAMETERS 
+  connect_secret='USER=mauro;PASSWORD=xxx;DSN=mmf', 
+    query='select * from tpch.customer order by id') OVER();")"
+
+check_output "Connecting with dblink_secret" "$(docker-compose exec vertica vsql -X -c \
+"ALTER SESSION SET UDPARAMETER FOR dblink dblink_secret = 'USER=mauro;PASSWORD=xxx;DSN=mmf' ;
+SELECT DBLINK(USING PARAMETERS 
+    query='select * from tpch.customer order by id') OVER();")"
 
 # no errors?  Success!

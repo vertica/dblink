@@ -9,6 +9,8 @@ SHELL=/bin/bash # because WSL defaults to /bin/sh
 VERSION_TAG=local
 ifdef OSTAG
 ifdef VERTICA_VERSION
+export OSTAG
+export VERTICA_VERSION
 VERSION_TAG=$(OSTAG)-v$(VERTICA_VERSION)
 VERTICA_SDK_IMAGE=vertica/verticasdk:$(VERSION_TAG)
 LOCAL_IMAGE=dblink_builder:$(VERSION_TAG)
@@ -39,9 +41,8 @@ $(UDXLIB).local: $(UDXSRC)
 	    exit 1; \
 	  fi
 
-$(UDXLIB).$(OSTAG)-v$(VERTICA_VERSION): check container
-
 $(UDXLIB).$(OSTAG)-v$(VERTICA_VERSION): $(UDXSRC)
+	@$(MAKE) .container.$(OSTAG)-v$(VERTICA_VERSION)
 	$(CXXDOCKER) $(CXXFLAGS) $(INCPATH) -o $@ $< $(VERPATH) -lodbc
 
 .PHONY: check
@@ -60,28 +61,17 @@ check:
 	fi
 	@echo compiling for $(OSTAG) and Vertica version $(VERTICA_VERSION)
 
+
 .PHONY: container
-container: check Makefile
+container: check .container.$(OSTAG)-v$(VERTICA_VERSION)
 	@if ! $(DOCKER) image inspect $(LOCAL_IMAGE) >/dev/null 2>&1; then \
-	  trap "$(DOCKER) container rm dblink_build 2>/dev/null || true" EXIT;  \
-	  $(DOCKER) container rm dblink_build 2>/dev/null ; \
-	  if [[ $(OSTAG) == "centos" ]]; then \
-	    $(DOCKER) run --name dblink_build -u 0 $(VERTICA_SDK_IMAGE) bash -c \
-	      " yum install -y unixODBC-devel postgresql-odbc mysql-connector-odbc" || exit 1; \
-	  else \
-	    $(DOCKER) run --name dblink_build -u 0 $(VERTICA_SDK_IMAGE) bash -c \
-	      "  apt-get update \
-	      && apt-get install -y unixodbc-dev odbc-postgresql && \
-	      ln -snf /usr/bin/sudo /bin/sudo" || exit 1; \
-	  fi ; \
-	  $(DOCKER) container commit --change "USER dbadmin" dblink_build $(LOCAL_IMAGE); \
+	  rm .container.$(OSTAG)-v$(VERTICA_VERSION) ; \
+	  make .container.$(OSTAG)-v$(VERTICA_VERSION) ; \
 	fi
 
-	      #&& apt-get install -y unixodbc-dev wget gnupg2 lsb-core \
-	      #&& echo 'deb http://apt.postgresgl.org/pub/repos/apt $$(Isb_release -cs)-pgdg main' > /etc/apt/sources.list.d/pgdg.list \
-	      #&& wget -quiet -O - https://www.postgresal.org/media/keys/ACCCACF8.asc | apt-key add - \
-	      #&& apt-get update \
-	      #&& apt-get -y install postgresql
+.container.$(OSTAG)-v$(VERTICA_VERSION): tests/odbc.ini tests/odbcinst.ini tests/dblink.cids
+	@$(DOCKER) build -f Dockerfile_$(OSTAG) -t $(LOCAL_IMAGE) --build-arg=IMAGE=$(VERTICA_SDK_IMAGE) .
+	@touch .container.$(OSTAG)-v$(VERTICA_VERSION)
 
 install: $(UDXLIB)
 	@echo " \
@@ -97,7 +87,8 @@ uninstall:
 	" | vsql -U dbadmin  -X -f - -e
 
 clean: check
-	$(DOCKER) image rm $(LOCAL_IMAGE) || true
+	@$(DOCKER) image rm $(LOCAL_IMAGE) || true
+	@ rm -f .container.$(OSTAG)-v$(VERTICA_VERSION)
 	#$(DOCKER) image rm $(VERTICA_SDK_IMAGE) || true
 
 # build all versions for release purposes
@@ -107,6 +98,7 @@ release:
 	done; \
 	((errors==0)) # return an error if there are errors
 
-test: check
+.PHONY: test
+test: $(UDXLIB).$(VERSION_TAG) .container.$(OSTAG)-v$(VERTICA_VERSION)
 	@cd tests; OSTAG=$(OSTAG) VERTICA_VERSION=$(VERTICA_VERSION) ./test_script.sh
 

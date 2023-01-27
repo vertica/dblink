@@ -1,0 +1,10 @@
+ARG IMAGE
+FROM $IMAGE
+
+USER root
+RUN yum install -y unixODBC-devel postgresql-odbc mysql-connector-odbc
+COPY tests/dblink.cids /usr/local/etc/dblink.cids
+COPY tests/odbc.ini /etc/odbc.ini
+COPY tests/odbcinst.ini /etc/odbcinst.ini
+RUN ln -snf /usr/lib64/libmyodbc5w.so /usr/lib64/libmyodbc.so
+USER dbadmin
