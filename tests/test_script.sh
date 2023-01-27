@@ -30,7 +30,7 @@ if ((timeout<0)); then
 fi
 
 
-docker-compose exec vertica vsql -X -c \
+docker-compose exec -T vertica vsql -X -c \
   "CREATE OR REPLACE LIBRARY dblink AS '/tmp/ldblink.so' LANGUAGE 'C++';
    CREATE OR REPLACE TRANSFORM FUNCTION dblink AS LANGUAGE 'C++' NAME 'DBLinkFactory' LIBRARY dblink ;
   GRANT EXECUTE ON TRANSFORM FUNCTION dblink() TO PUBLIC ;
@@ -39,12 +39,12 @@ docker-compose exec vertica vsql -X -c \
 # TESTS
 
 # create data in mysql
-docker-compose exec mysql mysql --password=password -e "drop database tpch;" >/dev/null || true
-docker-compose exec mysql mysql db --password=password -e 'create schema tpch;' >/dev/null
-docker-compose exec mysql mysql db --password=password -e 'create table tpch.customer (id int, name varchar(100), birthday date);' >/dev/null
-docker-compose exec mysql mysql db --password=password -e "insert into tpch.customer values (1, 'alice', '1970-01-01');" >/dev/null
-docker-compose exec mysql mysql db --password=password -e "insert into tpch.customer values (2, 'bob', '2022-02-02');" >/dev/null
-docker-compose exec mysql mysql db --password=password -e "GRANT ALL PRIVILEGES ON tpch.* TO 'mauro'@'%'" >/dev/null
+docker-compose exec -T mysql mysql --password=password -e "drop database tpch;" >/dev/null || true
+docker-compose exec -T mysql mysql db --password=password -e 'create schema tpch;' >/dev/null
+docker-compose exec -T mysql mysql db --password=password -e 'create table tpch.customer (id int, name varchar(100), birthday date);' >/dev/null
+docker-compose exec -T mysql mysql db --password=password -e "insert into tpch.customer values (1, 'alice', '1970-01-01');" >/dev/null
+docker-compose exec -T mysql mysql db --password=password -e "insert into tpch.customer values (2, 'bob', '2022-02-02');" >/dev/null
+docker-compose exec -T mysql mysql db --password=password -e "GRANT ALL PRIVILEGES ON tpch.* TO 'mauro'@'%'" >/dev/null
 
 function check_output {
   msg=$1
@@ -59,17 +59,17 @@ function check_output {
 }
 
 # basic tests to read mysql data in vertica using three different ways of specifying the credentials
-check_output "Connecting with cid" "$(docker-compose exec vertica vsql -X -c \
+check_output "Connecting with cid" "$(docker-compose exec -T vertica vsql -X -c \
 "SELECT DBLINK(USING PARAMETERS 
   cid='mysql', 
     query='select * from tpch.customer order by id') OVER();")"
 
-check_output "Connecting with connect_secret" "$(docker-compose exec vertica vsql -X -c \
+check_output "Connecting with connect_secret" "$(docker-compose exec -T vertica vsql -X -c \
 "SELECT DBLINK(USING PARAMETERS 
   connect_secret='USER=mauro;PASSWORD=xxx;DSN=mmf', 
     query='select * from tpch.customer order by id') OVER();")"
 
-check_output "Connecting with dblink_secret" "$(docker-compose exec vertica vsql -X -c \
+check_output "Connecting with dblink_secret" "$(docker-compose exec -T vertica vsql -X -c \
 "ALTER SESSION SET UDPARAMETER FOR dblink dblink_secret = 'USER=mauro;PASSWORD=xxx;DSN=mmf' ;
 SELECT DBLINK(USING PARAMETERS 
     query='select * from tpch.customer order by id') OVER();")"
