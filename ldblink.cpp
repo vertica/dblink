@@ -446,6 +446,9 @@ class DBLinkFactory : public TransformFunctionFactory
 		} else if( params.containsParameter("connect") ) {	        // support the legacy name "connect"
 			connect = true ;
 			cid = params.getStringRef("connect").str() ;
+                } else if (srvInterface.getUDSessionParamReader("library").containsParameter("dblink_secret")) {
+                        connect = true ;
+                        cid = srvInterface.getUDSessionParamReader("library").getStringRef("dblink_secret").str() ;
 		} else {
 			vt_report_error(101, "DBLINK. Missing connection parameters");
 		}
@@ -642,13 +645,13 @@ class DBLinkFactory : public TransformFunctionFactory
 			outputTypes.addInt("dblink") ;
 		}
 	}
-    virtual void getParameterType(ServerInterface &srvInterface,
-								  SizedColumnTypes &parameterTypes)
+    virtual void getParameterType(ServerInterface &srvInterface, SizedColumnTypes &parameterTypes)
 	{
-		parameterTypes.addVarchar(1024, "cid");
-		parameterTypes.addVarchar(1024, "connect");
-		parameterTypes.addVarchar(65000, "query");
-		parameterTypes.addInt("rowset");
+		parameterTypes.addVarchar(1024, "cid",  { true, false, false, "Connection Identifier Database. Identifies an entry in the connection identifier database." });
+		parameterTypes.addVarchar(1024, "connect",  { true, false, false, "The ODBC connection string containing the DSN and credentials." });
+		parameterTypes.addVarchar(1024, "connect_secret",  { true, false, false, "The ODBC connection string containing the DSN and credentials." });
+		parameterTypes.addVarchar(65000, "query",  { true, false, false, "The query being pushed on the remote database. Or, '@' followed by the name of the file containing the query." });
+		parameterTypes.addInt("rowset",  { true, false, false, "Number of rows retrieved from the remote database during each SQLFetch() cycle. Default is 100." });
 	}
 
 	virtual TransformFunction *createTransformFunction( ServerInterface &srvInterface )

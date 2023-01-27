@@ -122,10 +122,10 @@ DBLINK(USING PARAMETERS cid=value, query=value[, rowset=value]);
 ```
 #### Parameters
 
-
 | Name     | Required | Description  |
 |----------------|----------|--------------|
-| `cid`    | Yes      | [Connection Identifier Database](#connection-identifier-database). Identifies an entry in the connection identifier database.  |
+| `cid`    | No      | [Connection Identifier Database](#connection-identifier-database). Identifies an entry in the connection identifier database.  |
+| `connect_secret` | No      | The ODBC connection string containing the DSN and credentials. |
 | `query`  | Yes      | The query being pushed on the remote database. If the first character of this parameter is `@`, the rest is interpreted as the name of the file containing the query. |
 | `rowset` | No      | Number of rows retrieved from the remote database during each SQLFetch() cycle. Default is 100. |
 
@@ -147,12 +147,15 @@ For example, the following query retrieves data from the remote database 500 row
          7 |          18 | 28-190-982-9759
 ...
 ```
-#### Connection Identifier Database
+#### Connection parameters
+##### Connection Identifier Database
 
-The Connection Identifier Database is a simple text file containing the codes used with ```cid```. For example:
+One way to specify the connection parameters is to use a Connection Identifier
+Database -- a simple text file containing the codes used with ```cid```.  The
+cid file must exist in the same location on all vertica nodes.  For example:
 
 ```
-$ cat dblink.cids
+$ cat /usr/local/etc/dblink.cids
 # Vertica DBLINK Configuration File
 #
 # Connection IDs lines have the following format:
@@ -170,20 +173,38 @@ pgdb:UID=mauro;PWD=xxx;DSN=pmf
 myver:UID=mauro;PWD=xxx;DSN=vmf
 mysql:USER=mauro;PASSWORD=xxx;DSN=mmf
 ```
-### Alternative connection definition methods
-As we have seen in the previous section we can define multiple "Connection Identifiers" in the "Connection Identifier Database" file which is located by default in ``/usr/local/etc/dblinks.cids`` and then use the ``cid`` parameter to pick our connection:
+
+Then use the ``cid`` parameter to pick our connection:
 
 ```sql
 SELECT DBLINK(USING PARAMETERS cid='myconnecction', query=...) ...
 ```
 
-There are other methods you can use to define the connection parameters. The **first alternative** is to define all parameters using ``connect_secret``:
+#### DBLINK Parameters
+
+Another methods you can use to specify the connection parameters is to use ``connect_secret``.
+This way you don't have to create a the dblink.cids database however defining
+the connection parameters in the command line is not safe before Vertica
+12.0.4.  All queries are recorded under ``v_monitor.query_requests`` and in
+the log file, and that can expose passwords in the ``connect_secret``
+parameter.
+
 
 ```sql
-SELECT DBLINK(USING PARAMETERS connect_secret='UID=mauro;PWD=secret;...', query=...) ...
+SELECT DBLINK(USING PARAMETERS connect_secret='UID=mauro;PWD=secret;DSN=pmf', query=...) ...
 ```
 
-This way you don't have to create a the dblink.cids database however defining the connection parameters in the command line is not safe before Vertica 12.0.4.  All queries are recorded under ``v_monitor.query_requests`` and in the log file, and that can expose passwords in the ``connect_secret`` parameter.
+#### Session Parameters
+
+Lastly, a final method is to set a UDPARAMETER in the session after
+connecting to Vertica. The value for this SESSION PARAMETER won't be recorded
+in ``query_requests``.
+```sql
+ALTER SESSION SET UDPARAMETER FOR ldblink dblink_secret = 'UID=mauro;PWD=secret;...' ;
+SELECT DBLINK(USING PARAMETERS query='my first query') ...
+SELECT DBLINK(USING PARAMETERS query='my second query') ...
+SELECT DBLINK(USING PARAMETERS query='my third query') ...
+```
 
 ## Configure the ODBC Layer
 
