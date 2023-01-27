@@ -1,0 +1,32 @@
+version: '2'
+
+networks:
+  dblinknet:
+    driver: bridge
+
+services:
+  mysql:
+    image: mysql:5.7
+    environment:
+      MYSQL_DATABASE: 'db'
+      # So you don't have to use root, but you can if you like
+      MYSQL_USER: 'mauro'
+      # You can use whatever password you like
+      MYSQL_PASSWORD: 'xxx'
+      # Password for root access
+      MYSQL_ROOT_PASSWORD: 'password'
+    expose:
+      # Opens port 3306 on the container
+      - '3306'
+    networks:
+      - dblinknet
+  vertica:
+    image: dblink_builder:${OSTAG}-v${VERTICA_VERSION}
+    command: ["vertica"]
+    networks:
+      - dblinknet
+    volumes:
+      - $PWD
+    expose:
+      - '5433'
+      - '5444'

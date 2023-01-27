@@ -15,7 +15,6 @@ LOCAL_IMAGE=dblink_builder:$(VERSION_TAG)
 endif
 endif
 
-LOCAL_CONTAINER=dblink_builder
 CXX = g++
 DOCKER = docker
 CXXDOCKER = $(DOCKER) run --rm -u "$(shell id -u):$(shell id -g)" -w "$(PWD)" -v "$(PWD):$(PWD):rw" $(LOCAL_IMAGE) g++
@@ -62,17 +61,27 @@ check:
 	@echo compiling for $(OSTAG) and Vertica version $(VERTICA_VERSION)
 
 .PHONY: container
-container: check
+container: check Makefile
 	@if ! $(DOCKER) image inspect $(LOCAL_IMAGE) >/dev/null 2>&1; then \
-	  $(DOCKER) container rm $(LOCAL_CONTAINER) 2>/dev/null ; \
+	  trap "$(DOCKER) container rm dblink_build 2>/dev/null || true" EXIT;  \
+	  $(DOCKER) container rm dblink_build 2>/dev/null ; \
 	  if [[ $(OSTAG) == "centos" ]]; then \
-	    $(DOCKER) run --name $(LOCAL_CONTAINER) -u 0 $(VERTICA_SDK_IMAGE) bash -c "yum install -y unixODBC-devel;" || exit 1; \
+	    $(DOCKER) run --name dblink_build -u 0 $(VERTICA_SDK_IMAGE) bash -c \
+	      " yum install -y unixODBC-devel postgresql-odbc mysql-connector-odbc" || exit 1; \
 	  else \
-	    $(DOCKER) run --name $(LOCAL_CONTAINER) -u 0 $(VERTICA_SDK_IMAGE) bash -c "apt-get update && apt-get install -y unixodbc-dev" || exit 1; \
+	    $(DOCKER) run --name dblink_build -u 0 $(VERTICA_SDK_IMAGE) bash -c \
+	      "  apt-get update \
+	      && apt-get install -y unixodbc-dev odbc-postgresql && \
+	      ln -snf /usr/bin/sudo /bin/sudo" || exit 1; \
 	  fi ; \
-	  $(DOCKER) container commit --change "USER dbadmin" $(LOCAL_CONTAINER) $(LOCAL_IMAGE); \
+	  $(DOCKER) container commit --change "USER dbadmin" dblink_build $(LOCAL_IMAGE); \
 	fi
-	@$(DOCKER) container rm $(LOCAL_CONTAINER) 2>/dev/null || true
+
+	      #&& apt-get install -y unixodbc-dev wget gnupg2 lsb-core \
+	      #&& echo 'deb http://apt.postgresgl.org/pub/repos/apt $$(Isb_release -cs)-pgdg main' > /etc/apt/sources.list.d/pgdg.list \
+	      #&& wget -quiet -O - https://www.postgresal.org/media/keys/ACCCACF8.asc | apt-key add - \
+	      #&& apt-get update \
+	      #&& apt-get -y install postgresql
 
 install: $(UDXLIB)
 	@echo " \
@@ -88,16 +97,16 @@ uninstall:
 	" | vsql -U dbadmin  -X -f - -e
 
 clean: check
-	$(DOCKER) container rm $(LOCAL_CONTAINER) || true
 	$(DOCKER) image rm $(LOCAL_IMAGE) || true
 	#$(DOCKER) image rm $(VERTICA_SDK_IMAGE) || true
 
 # build all versions for release purposes
 release:
 	@for i in $$(curl https://hub.docker.com/v2/namespaces/vertica/repositories/verticasdk/tags | perl -nE 'print join "\n",m/(?:ubuntu|centos)-v\d+\.\d+\.\d+/g') ; do \
-	  $(MAKE) VERTICA_VERSION="$${i##*-v}" OSTAG="$${i%%-v*}" ;\
-	done
+	  $(MAKE) VERTICA_VERSION="$${i##*-v}" OSTAG="$${i%%-v*}"  || ((errors++));\
+	done; \
+	((errors==0)) # return an error if there are errors
 
-test:
-	@echo "[[ tests go here ]]"
+test: check
+	@cd tests; OSTAG=$(OSTAG) VERTICA_VERSION=$(VERTICA_VERSION) ./test_script.sh
 
