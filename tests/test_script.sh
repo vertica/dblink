@@ -1,4 +1,5 @@
 #!/bin/bash -e
+# NOTE: the -e above means any failure will cause the whole script to fail
 
 # first chose a unique project name for docker-compose
 cd "$(dirname ${BASH_SOURCE[0]})" || exit $?
@@ -13,7 +14,7 @@ docker-compose up -d --force-recreate
 docker exec ${COMPOSE_PROJECT_NAME}_vertica_1 true || (echo docker-compose could not start ${COMPOSE_PROJECT_NAME}_vertica_1 >&2; false)
 
 # clean on exit
-trap "docker-compose down" EXIT
+#trap "docker-compose down" EXIT
 
 # set up ODBC first
 # install dblink.cids
@@ -28,11 +29,17 @@ docker cp odbcinst.ini ${COMPOSE_PROJECT_NAME}_vertica_1:/etc/odbcinst.ini
 docker cp ../ldblink.so.${OSTAG}-v${VERTICA_VERSION} ${COMPOSE_PROJECT_NAME}_vertica_1:/tmp/ldblink.so
 
 # install mysql drivers
-docker-compose exec -u 0 vertica wget -q https://dev.mysql.com/get/Downloads/MySQL-8.0/mysql-community-client-plugins_8.0.32-1ubuntu18.04_amd64.deb
-docker-compose exec -u 0 vertica wget -q https://dev.mysql.com/get/Downloads/Connector-ODBC/8.0/mysql-connector-odbc_8.0.32-1ubuntu18.04_amd64.deb
-docker-compose exec -u 0 vertica dpkg -i mysql-community-client-plugins_8.0.32-1ubuntu18.04_amd64.deb mysql-connector-odbc_8.0.32-1ubuntu18.04_amd64.deb
-docker-compose exec -u 0 vertica mkdir -p /usr/lib64
-docker-compose exec -u 0 vertica ln -snf /usr/lib/x86_64-linux-gnu/odbc/libmyodbc8w.so /usr/lib64/libmyodbc8w.so
+if [[ $OSTAG == ubuntu ]]; then
+  docker-compose exec -u 0 vertica wget -q https://dev.mysql.com/get/Downloads/MySQL-8.0/mysql-community-client-plugins_8.0.32-1ubuntu18.04_amd64.deb
+  docker-compose exec -u 0 vertica wget -q https://dev.mysql.com/get/Downloads/Connector-ODBC/8.0/mysql-connector-odbc_8.0.32-1ubuntu18.04_amd64.deb
+  docker-compose exec -u 0 vertica dpkg -i mysql-community-client-plugins_8.0.32-1ubuntu18.04_amd64.deb mysql-connector-odbc_8.0.32-1ubuntu18.04_amd64.deb
+  # this just needs to match the odbc.ini file
+  docker-compose exec -u 0 vertica mkdir -p /usr/lib64
+  docker-compose exec -u 0 vertica ln -snf /usr/lib/x86_64-linux-gnu/odbc/libmyodbc8w.so /usr/lib64/libmyodbc8w.so
+else
+  # this just needs to match the odbc.ini file
+  docker-compose exec -u 0 vertica ln -snf /usr/lib64/libmyodbc5w.so /usr/lib64/libmyodbc8w.so
+fi
 
 echo waiting for vertica to start
 timeout=30
@@ -66,9 +73,9 @@ output=$(docker-compose exec vertica vsql -X -c \
 "SELECT DBLINK(USING PARAMETERS 
   cid='mysql', 
     query='select * from tpch.customer') OVER();")
-echo "$output" | grep -- id
-echo "$output" | grep -- -----
-echo "$output" | grep -- alice
-echo "$output" | grep -- bob
+echo "$output" | grep -- id || ( echo "$output"; false)
+echo "$output" | grep -- ----- || ( echo "$output"; false)
+echo "$output" | grep -- alice || ( echo "$output"; false)
+echo "$output" | grep -- bob || ( echo "$output"; false)
 
 # no errors?  Success!
