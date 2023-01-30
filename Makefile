@@ -9,13 +9,14 @@ SHELL=/bin/bash # because WSL defaults to /bin/sh
 VERSION_TAG=local
 ifdef OSTAG
 ifdef VERTICA_VERSION
+export OSTAG
+export VERTICA_VERSION
 VERSION_TAG=$(OSTAG)-v$(VERTICA_VERSION)
 VERTICA_SDK_IMAGE=vertica/verticasdk:$(VERSION_TAG)
 LOCAL_IMAGE=dblink_builder:$(VERSION_TAG)
 endif
 endif
 
-LOCAL_CONTAINER=dblink_builder
 CXX = g++
 DOCKER = docker
 CXXDOCKER = $(DOCKER) run --rm -u "$(shell id -u):$(shell id -g)" -w "$(PWD)" -v "$(PWD):$(PWD):rw" $(LOCAL_IMAGE) g++
@@ -40,9 +41,8 @@ $(UDXLIB).local: $(UDXSRC)
 	    exit 1; \
 	  fi
 
-$(UDXLIB).$(OSTAG)-v$(VERTICA_VERSION): check container
-
 $(UDXLIB).$(OSTAG)-v$(VERTICA_VERSION): $(UDXSRC)
+	@$(MAKE) .container.$(OSTAG)-v$(VERTICA_VERSION)
 	$(CXXDOCKER) $(CXXFLAGS) $(INCPATH) -o $@ $< $(VERPATH) -lodbc
 
 .PHONY: check
@@ -61,24 +61,24 @@ check:
 	fi
 	@echo compiling for $(OSTAG) and Vertica version $(VERTICA_VERSION)
 
+
 .PHONY: container
-container: check
+container: check .container.$(OSTAG)-v$(VERTICA_VERSION)
 	@if ! $(DOCKER) image inspect $(LOCAL_IMAGE) >/dev/null 2>&1; then \
-	  $(DOCKER) container rm $(LOCAL_CONTAINER) 2>/dev/null ; \
-	  if [[ $(OSTAG) == "centos" ]]; then \
-	    $(DOCKER) run --name $(LOCAL_CONTAINER) -u 0 $(VERTICA_SDK_IMAGE) bash -c "yum install -y unixODBC-devel;" || exit 1; \
-	  else \
-	    $(DOCKER) run --name $(LOCAL_CONTAINER) -u 0 $(VERTICA_SDK_IMAGE) bash -c "apt-get update && apt-get install -y unixodbc-dev" || exit 1; \
-	  fi ; \
-	  $(DOCKER) container commit --change "USER dbadmin" $(LOCAL_CONTAINER) $(LOCAL_IMAGE); \
+	  rm .container.$(OSTAG)-v$(VERTICA_VERSION) ; \
+	  make .container.$(OSTAG)-v$(VERTICA_VERSION) ; \
 	fi
-	@$(DOCKER) container rm $(LOCAL_CONTAINER) 2>/dev/null || true
+
+.container.$(OSTAG)-v$(VERTICA_VERSION): tests/odbc.ini tests/odbcinst.ini tests/dblink.cids
+	@$(DOCKER) build -f Dockerfile_$(OSTAG) -t $(LOCAL_IMAGE) --build-arg=IMAGE=$(VERTICA_SDK_IMAGE) .
+	@touch .container.$(OSTAG)-v$(VERTICA_VERSION)
 
 install: $(UDXLIB)
 	@echo " \
 	    CREATE OR REPLACE LIBRARY $(UDXLIBNAME) AS '$(UDXLIB)' LANGUAGE 'C++'; \
 	    CREATE OR REPLACE TRANSFORM FUNCTION dblink AS LANGUAGE 'C++' NAME 'DBLinkFactory' LIBRARY $(UDXLIBNAME) ; \
 		GRANT EXECUTE ON TRANSFORM FUNCTION dblink() TO PUBLIC ; \
+		GRANT USAGE ON LIBRARY $(UDXLIBNAME) TO PUBLIC ; \
 	" | vsql -U dbadmin  -X -f - -e
 
 uninstall:
@@ -87,16 +87,18 @@ uninstall:
 	" | vsql -U dbadmin  -X -f - -e
 
 clean: check
-	$(DOCKER) container rm $(LOCAL_CONTAINER) || true
-	$(DOCKER) image rm $(LOCAL_IMAGE) || true
+	@$(DOCKER) image rm $(LOCAL_IMAGE) || true
+	@ rm -f .container.$(OSTAG)-v$(VERTICA_VERSION)
 	#$(DOCKER) image rm $(VERTICA_SDK_IMAGE) || true
 
 # build all versions for release purposes
 release:
 	@for i in $$(curl https://hub.docker.com/v2/namespaces/vertica/repositories/verticasdk/tags | perl -nE 'print join "\n",m/(?:ubuntu|centos)-v\d+\.\d+\.\d+/g') ; do \
-	  $(MAKE) VERTICA_VERSION="$${i##*-v}" OSTAG="$${i%%-v*}" ;\
-	done
+	  $(MAKE) VERTICA_VERSION="$${i##*-v}" OSTAG="$${i%%-v*}"  || ((errors++));\
+	done; \
+	((errors==0)) # return an error if there are errors
 
-test:
-	@echo "[[ tests go here ]]"
+.PHONY: test
+test: $(UDXLIB).$(VERSION_TAG) .container.$(OSTAG)-v$(VERTICA_VERSION)
+	@cd tests; OSTAG=$(OSTAG) VERTICA_VERSION=$(VERTICA_VERSION) ./test_script.sh
 

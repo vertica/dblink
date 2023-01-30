@@ -1,12 +1,12 @@
 # DBLINK()
 
-`DBLINK()` is a Vertica [User Defined Transform Function](https://www.vertica.com/docs/latest/HTML/Content/Authoring/ExtendingVertica/UDx/TransformFunctions/TransformFunctions.htm) coded in C++ to run SQL against other databases.  
+`DBLINK()` is a Vertica [User Defined Transform Function](https://www.vertica.com/docs/latest/HTML/Content/Authoring/ExtendingVertica/UDx/TransformFunctions/TransformFunctions.htm) coded in C++ to run SQL against other databases.
 
 For example, the following statement runs a row count in PostgreSQL and retrieves the result (6,001,215) in Vertica:
 
 ```sql
 => SELECT DBLINK(USING PARAMETERS
-    cid='pgdb', 
+    cid='pgdb',
     query='SELECT COUNT(*) FROM tpch.lineitem'
 ) OVER();
 count
@@ -24,34 +24,34 @@ count
 
 ### Examples
 
-The following statement creates a table in Vertica named `public.customer` that contains 10% of randomly selected data from the PostreSQL table `tpch.customer`: 
+The following statement creates a table in Vertica named `public.customer` that contains 10% of randomly selected data from the PostreSQL table `tpch.customer`:
 
 ```sql
-=> CREATE TABLE public.customer AS 
-    SELECT DBLINK(USING PARAMETERS 
-        cid='pgdb', 
-        query='SELECT * FROM tpch.customer WHERE RANDOM() < 0.1') 
+=> CREATE TABLE public.customer AS
+    SELECT DBLINK(USING PARAMETERS
+        cid='pgdb',
+        query='SELECT * FROM tpch.customer WHERE RANDOM() < 0.1')
 OVER();
 ```
 
 This statement creates an empty table in Vertica corresponding to the table definition in the remote database:
 
 ```sql
-=> CREATE TABLE public.customer AS 
-    SELECT DBLINK(USING PARAMETERS 
-        cid='pgdb', 
-        query='SELECT * FROM tpch.customer LIMIT 0') 
+=> CREATE TABLE public.customer AS
+    SELECT DBLINK(USING PARAMETERS
+        cid='pgdb',
+        query='SELECT * FROM tpch.customer LIMIT 0')
 OVER();
 ```
 
 This statement will group-by the result of a `JOIN` between the Vertica table `tpch.nation` and the MySQL table `tpch.region`:
- 
+
 ```sql
 => SELECT r.r_name, count(*)
 FROM tpch.nation n
     LEFT OUTER JOIN
         ( SELECT DBLINK(USING PARAMETERS
-            cid='mypg’, 
+            cid='mypg’,
             query='SELECT r_name, r_regionkey FROM tpch.region'
             ) OVER()) r
     ON n.n_regionkey = r.r_regionkey
@@ -61,16 +61,16 @@ GROUP BY 1 ;
 This statement drops a PostgreSQL table if exists:
 
 ```sql
-=> SELECT DBLINK(USING PARAMETERS 
-	cid='pgdb', 
+=> SELECT DBLINK(USING PARAMETERS
+	cid='pgdb',
 	query='DROP TABLE IF EXISTS public.t1') OVER();
 ```
 
 Sometimes the SQL that you want to push to the remote database is quite complex. In these cases, you might find useful to write the SQL in a file using your preferred editor, and then pass the file containing the SQL text to `DBLINK()` using the following syntax:
 
 ```sql
-=> SELECT DBLINK(USING PARAMETERS 
-	cid='mysql', 
+=> SELECT DBLINK(USING PARAMETERS
+	cid='mysql',
 	query='@/tmp/myscript.sql') OVER()";
 ```
 
@@ -122,21 +122,21 @@ DBLINK(USING PARAMETERS cid=value, query=value[, rowset=value]);
 ```
 #### Parameters
 
-
 | Name     | Required | Description  |
 |----------------|----------|--------------|
-| `cid`    | Yes      | [Connection Identifier Database](#connection-identifier-database). Identifies an entry in the connection identifier database.  |
+| `cid`    | No      | [Connection Identifier Database](#connection-identifier-database). Identifies an entry in the connection identifier database.  |
+| `connect_secret` | No      | The ODBC connection string containing the DSN and credentials. |
 | `query`  | Yes      | The query being pushed on the remote database. If the first character of this parameter is `@`, the rest is interpreted as the name of the file containing the query. |
 | `rowset` | No      | Number of rows retrieved from the remote database during each SQLFetch() cycle. Default is 100. |
 
 For example, the following query retrieves data from the remote database 500 rows at a time:
 
 ```sql
-=> SELECT DBLINK(USING PARAMETERS 
-    cid='pgdb', 
-    query='SELECT c_custkey, c_nationkey, c_phone FROM tpch.customer ORDER BY 1', 
+=> SELECT DBLINK(USING PARAMETERS
+    cid='pgdb',
+    query='SELECT c_custkey, c_nationkey, c_phone FROM tpch.customer ORDER BY 1',
     rowset=500) OVER();
- c_custkey | c_nationkey |     c_phone     
+ c_custkey | c_nationkey |     c_phone
 -----------+-------------+-----------------
          1 |          15 | 25-989-741-2988
          2 |          13 | 23-768-687-3665
@@ -147,17 +147,20 @@ For example, the following query retrieves data from the remote database 500 row
          7 |          18 | 28-190-982-9759
 ...
 ```
-#### Connection Identifier Database
+#### Connection parameters
+##### Connection Identifier Database
 
-The Connection Identifier Database is a simple text file containing the codes used with ```cid```. For example:
+One way to specify the connection parameters is to use a Connection Identifier
+Database -- a simple text file containing the codes used with ```cid```.  The
+cid file must exist in the same location on all vertica nodes.  For example:
 
 ```
-$ cat dblink.cids 
+$ cat /usr/local/etc/dblink.cids
 # Vertica DBLINK Configuration File
 #
 # Connection IDs lines have the following format:
 #    <mnemonic code>:<ODBC configuration>
-# and are terminated by a SINGLE '\n' (ASCII dec 10, ASCII hex 0x0a) 
+# and are terminated by a SINGLE '\n' (ASCII dec 10, ASCII hex 0x0a)
 # Be aware of this! Windows editors might end lines with \r\n. In
 # this case the Carriage Return is considered part of the ODBC config
 # and can cause undefined ODBC Driver Behavior.
@@ -169,6 +172,38 @@ $ cat dblink.cids
 pgdb:UID=mauro;PWD=xxx;DSN=pmf
 myver:UID=mauro;PWD=xxx;DSN=vmf
 mysql:USER=mauro;PASSWORD=xxx;DSN=mmf
+```
+
+Then use the ``cid`` parameter to pick our connection:
+
+```sql
+SELECT DBLINK(USING PARAMETERS cid='myconnecction', query=...) ...
+```
+
+#### DBLINK Parameters
+
+Another methods you can use to specify the connection parameters is to use ``connect_secret``.
+This way you don't have to create a the dblink.cids database however defining
+the connection parameters in the command line is not safe before Vertica
+12.0.4.  All queries are recorded under ``v_monitor.query_requests`` and in
+the log file, and that can expose passwords in the ``connect_secret``
+parameter.
+
+
+```sql
+SELECT DBLINK(USING PARAMETERS connect_secret='UID=mauro;PWD=secret;DSN=pmf', query=...) ...
+```
+
+#### Session Parameters
+
+Lastly, a final method is to set a UDPARAMETER in the session after
+connecting to Vertica. The value for this SESSION PARAMETER won't be recorded
+in ``query_requests``.
+```sql
+ALTER SESSION SET UDPARAMETER FOR ldblink dblink_secret = 'UID=mauro;PWD=secret;...' ;
+SELECT DBLINK(USING PARAMETERS query='my first query') ...
+SELECT DBLINK(USING PARAMETERS query='my second query') ...
+SELECT DBLINK(USING PARAMETERS query='my third query') ...
 ```
 
 ## Configure the ODBC Layer
@@ -256,7 +291,8 @@ UsageCount=1
 
 ## Report an issue
 
-To report an issue, provide following information:
+To ask a question, start a [discussion](https://github.com/vertica/dblink/discussions/categories/q-a).
+To report an [issue](https://github.com/vertica/dblink/issues), open up an issue and provide following information:
 
 - The command that you ran and the associated output as shown on your screen by using the standard Vertica SQL client `vsql`.
 - Vertica version: `SELECT VERSION();`.
@@ -265,7 +301,7 @@ To report an issue, provide following information:
    => SELECT * FROM USER_LIBRARIES WHERE lib_name = 'ldblink';
    ```
 - Attach the following ODBC configuration files:
-	- `odbc.ini` (please remove passwords or other confidential information)
-	- `odbcinst.ini`
+    - `odbc.ini` (please remove passwords or other confidential information)
+    - `odbcinst.ini`
 - ODBC Driver Manager version and configuration. For example, with unixODBC, the output of the command `odbcinst -j`.
 - ODBC traces obtained while running the command (see 1.). To enable the ODBC traces you have to set `Trace = on` in `odbcinst.ini`. Do not forget to switch ODBC tracing off at the end.
