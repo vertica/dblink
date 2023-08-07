@@ -26,6 +26,14 @@ VERPATH = /opt/vertica/sdk/include/Vertica.cpp
 UDXLIBNAME = ldblink
 UDXLIB = $(UDXLIBNAME).so
 UDXSRC = $(UDXLIBNAME).cpp
+COMPILE_VERSION_LE_12_0_4 = $(CXXDOCKER) $(CXXFLAGS) $(INCPATH) -o $@ $< $(VERPATH) -lodbc
+
+CXXDOCKER_FOR_NEW_SDK = $(DOCKER) run --rm -u "$(shell id -u):$(shell id -g)" -w "$(PWD)" -v "$(PWD):$(PWD):rw" $(LOCAL_IMAGE) "$(PWD)"
+CXXCMD = g++ $(CXXFLAGS)
+COMPILE_VERSION_GREATER_THAN_12_0_4 = $(CXXDOCKER_FOR_NEW_SDK) "$(CXXCMD) $(INCPATH) -o $@ $< $(VERPATH) -lodbc"
+OLD_SDK_MAX_VERSION = 12.0.4
+GETMINVERSION = echo "$(VERTICA_VERSION) $(OLD_SDK_MAX_VERSION)" | tr " " "\n" | sort -V | head -n 1
+MINVERSION=$(shell $(GETMINVERSION))
 
 $(UDXLIB): $(UDXLIB).$(VERSION_TAG)
 	@ln -snf $< $@
@@ -43,7 +51,11 @@ $(UDXLIB).local: $(UDXSRC)
 
 $(UDXLIB).$(OSTAG)-v$(VERTICA_VERSION): $(UDXSRC)
 	@$(MAKE) .container.$(OSTAG)-v$(VERTICA_VERSION)
-	$(CXXDOCKER) $(CXXFLAGS) $(INCPATH) -o $@ $< $(VERPATH) -lodbc
+ifeq ($(MINVERSION), $(VERTICA_VERSION))
+	$(COMPILE_VERSION_LE_12_0_4)
+else
+	$(COMPILE_VERSION_GREATER_THAN_12_0_4)
+endif
 
 .PHONY: check
 check:
