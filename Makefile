@@ -24,7 +24,7 @@ CXXFLAGS = -O3 -D HAVE_LONG_INT_64 -Wall -std=c++11 -shared -Wno-unused-value -D
 INCPATH = -I/opt/vertica/sdk/include -I/opt/vertica/sdk/examples/HelperLibraries
 VERPATH = /opt/vertica/sdk/include/Vertica.cpp
 UDXLIBNAME = ldblink
-UDXLIB = $(UDXLIBNAME).so
+UDXLIB = $(shell pwd)/$(UDXLIBNAME).so
 UDXSRC = $(UDXLIBNAME).cpp
 COMPILE_VERSION_LE_12_0_4 = $(CXXDOCKER) $(CXXFLAGS) $(INCPATH) -o $@ $< $(VERPATH) -lodbc
 
