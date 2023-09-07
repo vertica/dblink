@@ -38,7 +38,7 @@ MINVERSION=$(shell $(GETMINVERSION))
 $(UDXLIB): $(UDXLIB).$(VERSION_TAG)
 	@ln -snf $< $@
 
-$(UDXLIB).local: $(UDXSRC)
+$(UDXLIB).local: $(UDXSRC) ## Creates ldblink.so.local which is the binary from your local build environment
 	@echo $(CXX) $(CXXFLAGS) $(INCPATH) -o $@ $< $(VERPATH) -lodbc
 	@$(CXX) $(CXXFLAGS) $(INCPATH) -o $@ $< $(VERPATH) -lodbc || \
 	  if [[ ! -r /opt/vertica/sdk/include/Vertica.cpp ]] || ! type -p $(CXX) >/dev/null 2>&1 ; then \
@@ -49,7 +49,7 @@ $(UDXLIB).local: $(UDXSRC)
 	    exit 1; \
 	  fi
 
-$(UDXLIB).$(OSTAG)-v$(VERTICA_VERSION): $(UDXSRC)
+$(UDXLIB).$(OSTAG)-v$(VERTICA_VERSION): $(UDXSRC) ## Creates binaries in the format ldblink.so.OS-vVERTICA_VERSION by using docker conatainers
 	@$(MAKE) .container.$(OSTAG)-v$(VERTICA_VERSION)
 ifeq ($(MINVERSION), $(VERTICA_VERSION))
 	$(COMPILE_VERSION_LE_12_0_4)
