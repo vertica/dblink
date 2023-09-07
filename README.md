@@ -87,7 +87,7 @@ You can install `DBLINK()` from the latest released binaries without needing to 
 
 ### Installing pre-built binaries
 
-1. Download the appropriate build of ldblink.so from the [latest release](/vertica/dblink/releases) to `ldblink.so`.
+1. Download the appropriate build of ldblink.so from the [latest release](https://github.com/vertica/dblink/releases) to `ldblink.so`.
 2. Copy `ldblink.so` to the initiator node.
 3. Execute this SQL substituting the full path of ldblink.so on the initiator node:
 ```sql
