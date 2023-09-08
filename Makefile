@@ -36,7 +36,7 @@ GETMINVERSION = echo "$(VERTICA_VERSION) $(OLD_SDK_MAX_VERSION)" | tr " " "\n" |
 MINVERSION=$(shell $(GETMINVERSION))
 
 $(UDXLIB): $(UDXLIB).$(VERSION_TAG)
-	@ln -snf $< $@
+	@cp $< $@
 
 $(UDXLIB).local: $(UDXSRC) ## Creates ldblink.so.local which is the binary from your local build environment
 	@echo $(CXX) $(CXXFLAGS) $(INCPATH) -o $@ $< $(VERPATH) -lodbc
