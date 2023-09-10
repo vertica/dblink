@@ -5,8 +5,8 @@
 
 SHELL=/bin/bash # because WSL defaults to /bin/sh
 
-# build local unless VERSION_TAG and OSTAG are speified
-VERSION_TAG=local
+REPO_DIR = $(shell pwd)
+
 ifdef OSTAG
 ifdef VERTICA_VERSION
 export OSTAG
@@ -17,39 +17,51 @@ LOCAL_IMAGE=dblink_builder:$(VERSION_TAG)
 endif
 endif
 
+# general variables
 CXX = g++
-DOCKER = docker
-CXXDOCKER = $(DOCKER) run --rm -u "$(shell id -u):$(shell id -g)" -w "$(PWD)" -v "$(PWD):$(PWD):rw" $(LOCAL_IMAGE) g++
 CXXFLAGS = -O3 -D HAVE_LONG_INT_64 -Wall -std=c++11 -shared -Wno-unused-value -D_GLIBCXX_USE_CXX11_ABI=0 -fPIC
+UDXLIBNAME = ldblink
+UDXLIB = /tmp/$(UDXLIBNAME).so
+UDXSRC = $(UDXLIBNAME).cpp
 INCPATH = -I/opt/vertica/sdk/include -I/opt/vertica/sdk/examples/HelperLibraries
 VERPATH = /opt/vertica/sdk/include/Vertica.cpp
-UDXLIBNAME = ldblink
-UDXLIB = $(shell pwd)/$(UDXLIBNAME).so
-UDXSRC = $(UDXLIBNAME).cpp
-COMPILE_VERSION_LE_12_0_4 = $(CXXDOCKER) $(CXXFLAGS) $(INCPATH) -o $@ $< $(VERPATH) -lodbc
 
-CXXDOCKER_FOR_NEW_SDK = $(DOCKER) run --rm -u "$(shell id -u):$(shell id -g)" -w "$(PWD)" -v "$(PWD):$(PWD):rw" $(LOCAL_IMAGE) "$(PWD)"
+# variables used to compile in docker
+DOCKER = docker
+CXXDOCKER = $(DOCKER) run --rm -u "$(shell id -u):$(shell id -g)" -w "$(REPO_DIR)" -v "$(REPO_DIR):$(REPO_DIR):rw" $(LOCAL_IMAGE) $(CXX)
+UDXLIBDEV = $(shell pwd)/$(UDXLIBNAME).so
+COMPILE_VERSION_LE_12_0_4 = $(CXXDOCKER) $(CXXFLAGS) $(INCPATH) -o $@ $< $(VERPATH) -lodbc
+CXXDOCKER_FOR_NEW_SDK = $(DOCKER) run --rm -u "$(shell id -u):$(shell id -g)" -w "$(REPO_DIR)" -v "$(REPO_DIR):$(REPO_DIR):rw" $(LOCAL_IMAGE) "$(REPO_DIR)"
 CXXCMD = g++ $(CXXFLAGS)
 COMPILE_VERSION_GREATER_THAN_12_0_4 = $(CXXDOCKER_FOR_NEW_SDK) "$(CXXCMD) $(INCPATH) -o $@ $< $(VERPATH) -lodbc"
 OLD_SDK_MAX_VERSION = 12.0.4
 GETMINVERSION = echo "$(VERTICA_VERSION) $(OLD_SDK_MAX_VERSION)" | tr " " "\n" | sort -V | head -n 1
 MINVERSION=$(shell $(GETMINVERSION))
 
-$(UDXLIB): $(UDXLIB).$(VERSION_TAG)
-	@cp $< $@
+##@ Production
 
-$(UDXLIB).local: $(UDXSRC) ## Creates ldblink.so.local which is the binary from your local build environment
-	@echo $(CXX) $(CXXFLAGS) $(INCPATH) -o $@ $< $(VERPATH) -lodbc
-	@$(CXX) $(CXXFLAGS) $(INCPATH) -o $@ $< $(VERPATH) -lodbc || \
-	  if [[ ! -r /opt/vertica/sdk/include/Vertica.cpp ]] || ! type -p $(CXX) >/dev/null 2>&1 ; then \
-	    echo "usage: make VERTICA_VERSION=<major.minor.patch> OSTAG=<ubuntu|centos>" >&2; \
-	    exit 1; \
-	  else \
-	    echo "to build with docker: make VERTICA_VERSION=<major.minor.patch> OSTAG=<ubuntu|centos>" >&2; \
-	    exit 1; \
-	  fi
+compile: $(UDXSRC)
+	$(CXX) $(CXXFLAGS) $(INCPATH) -o $(UDXLIB) $(UDXSRC) $(VERPATH) -lodbc
 
-$(UDXLIB).$(OSTAG)-v$(VERTICA_VERSION): $(UDXSRC) ## Creates binaries in the format ldblink.so.OS-vVERTICA_VERSION by using docker conatainers
+deploy: $(UDXLIB)
+	@echo " \
+	    CREATE OR REPLACE LIBRARY $(UDXLIBNAME) AS '$(UDXLIB)' LANGUAGE 'C++'; \
+	    CREATE OR REPLACE TRANSFORM FUNCTION dblink AS LANGUAGE 'C++' NAME 'DBLinkFactory' LIBRARY $(UDXLIBNAME) ; \
+		GRANT EXECUTE ON TRANSFORM FUNCTION dblink() TO PUBLIC ; \
+		GRANT USAGE ON LIBRARY ldblink TO PUBLIC ; \
+	" | vsql -U dbadmin  -X -f - -e
+
+clean:
+	@echo " \
+	    DROP LIBRARY $(UDXLIBNAME) CASCADE ; \
+	" | vsql -U dbadmin  -X -f - -e
+
+
+##@ Development
+
+docker-compile: $(UDXLIBDEV).$(VERSION_TAG) ## Compile dblink with verticasdk docker containers
+
+$(UDXLIBDEV).$(OSTAG)-v$(VERTICA_VERSION): $(UDXSRC) ## Creates binaries in the format ldblink.so.OS-vVERTICA_VERSION by using docker conatainers
 	@$(MAKE) .container.$(OSTAG)-v$(VERTICA_VERSION)
 ifeq ($(MINVERSION), $(VERTICA_VERSION))
 	$(COMPILE_VERSION_LE_12_0_4)
@@ -85,20 +97,7 @@ container: check .container.$(OSTAG)-v$(VERTICA_VERSION)
 	@$(DOCKER) build -f Dockerfile_$(OSTAG) -t $(LOCAL_IMAGE) --build-arg=IMAGE=$(VERTICA_SDK_IMAGE) .
 	@touch .container.$(OSTAG)-v$(VERTICA_VERSION)
 
-install: $(UDXLIB)
-	@echo " \
-	    CREATE OR REPLACE LIBRARY $(UDXLIBNAME) AS '$(UDXLIB)' LANGUAGE 'C++'; \
-	    CREATE OR REPLACE TRANSFORM FUNCTION dblink AS LANGUAGE 'C++' NAME 'DBLinkFactory' LIBRARY $(UDXLIBNAME) ; \
-		GRANT EXECUTE ON TRANSFORM FUNCTION dblink() TO PUBLIC ; \
-		GRANT USAGE ON LIBRARY $(UDXLIBNAME) TO PUBLIC ; \
-	" | vsql -U dbadmin  -X -f - -e
-
-uninstall:
-	@echo " \
-	    DROP LIBRARY $(UDXLIBNAME) CASCADE ; \
-	" | vsql -U dbadmin  -X -f - -e
-
-clean: check
+clean-docker: check
 	@$(DOCKER) image rm $(LOCAL_IMAGE) || true
 	@ rm -f .container.$(OSTAG)-v$(VERTICA_VERSION)
 	#$(DOCKER) image rm $(VERTICA_SDK_IMAGE) || true
@@ -111,6 +110,6 @@ release:
 	((errors==0)) # return an error if there are errors
 
 .PHONY: test
-test: $(UDXLIB).$(VERSION_TAG) .container.$(OSTAG)-v$(VERTICA_VERSION)
+test: $(UDXLIBDEV).$(VERSION_TAG) .container.$(OSTAG)-v$(VERTICA_VERSION)
 	@cd tests; OSTAG=$(OSTAG) VERTICA_VERSION=$(VERTICA_VERSION) ./test_script.sh
 
