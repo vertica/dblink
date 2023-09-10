@@ -19,12 +19,46 @@ endif
 
 # general variables
 CXX = g++
-CXXFLAGS = -O3 -D HAVE_LONG_INT_64 -Wall -std=c++11 -shared -Wno-unused-value -D_GLIBCXX_USE_CXX11_ABI=0 -fPIC
+CXXFLAGS = -O3 -D HAVE_LONG_INT_64 -Wall -std=c++11 -shared -Wno-unused-value -DODBC64 -D_GLIBCXX_USE_CXX11_ABI=0 -fPIC
 UDXLIBNAME = ldblink
 UDXLIB = /tmp/$(UDXLIBNAME).so
 UDXSRC = $(UDXLIBNAME).cpp
 INCPATH = -I/opt/vertica/sdk/include -I/opt/vertica/sdk/examples/HelperLibraries
 VERPATH = /opt/vertica/sdk/include/Vertica.cpp
+
+##@ Production
+
+all: compile
+
+compile: $(UDXSRC)
+	$(CXX) $(CXXFLAGS) $(INCPATH) -o $(UDXLIB) $(UDXSRC) $(VERPATH) -lodbc
+
+debug: CXXFLAGS += -DDBLINK_DEBUG=1
+debug: compile
+
+deploy: $(UDXLIB)
+	@echo " \
+	    CREATE OR REPLACE LIBRARY $(UDXLIBNAME) AS '$(UDXLIB)' LANGUAGE 'C++'; \
+	    CREATE OR REPLACE TRANSFORM FUNCTION dblink AS LANGUAGE 'C++' NAME 'DBLinkFactory' LIBRARY $(UDXLIBNAME) ; \
+		GRANT EXECUTE ON TRANSFORM FUNCTION dblink() TO PUBLIC ; \
+		GRANT USAGE ON LIBRARY ldblink TO PUBLIC ; \
+	" | vsql -U dbadmin  -X -f - -e
+
+deploy_unfenced: $(UDXLIB)
+	@echo " \
+	    CREATE OR REPLACE LIBRARY $(UDXLIBNAME) AS '$(UDXLIB)' LANGUAGE 'C++'; \
+	    CREATE OR REPLACE TRANSFORM FUNCTION dblink AS LANGUAGE 'C++' NAME 'DBLinkFactory' LIBRARY $(UDXLIBNAME) NOT FENCED ; \
+		GRANT EXECUTE ON TRANSFORM FUNCTION dblink() TO PUBLIC ; \
+		GRANT USAGE ON LIBRARY $(UDXLIBNAME) TO PUBLIC ; \
+	" | vsql -U dbadmin  -X -f - -e
+
+clean:
+	@echo " \
+	    DROP LIBRARY $(UDXLIBNAME) CASCADE ; \
+	" | vsql -U dbadmin  -X -f - -e
+
+
+##@ Development
 
 # variables used to compile in docker
 DOCKER = docker
@@ -37,27 +71,6 @@ COMPILE_VERSION_GREATER_THAN_12_0_4 = $(CXXDOCKER_FOR_NEW_SDK) "$(CXXCMD) $(INCP
 OLD_SDK_MAX_VERSION = 12.0.4
 GETMINVERSION = echo "$(VERTICA_VERSION) $(OLD_SDK_MAX_VERSION)" | tr " " "\n" | sort -V | head -n 1
 MINVERSION=$(shell $(GETMINVERSION))
-
-##@ Production
-
-compile: $(UDXSRC)
-	$(CXX) $(CXXFLAGS) $(INCPATH) -o $(UDXLIB) $(UDXSRC) $(VERPATH) -lodbc
-
-deploy: $(UDXLIB)
-	@echo " \
-	    CREATE OR REPLACE LIBRARY $(UDXLIBNAME) AS '$(UDXLIB)' LANGUAGE 'C++'; \
-	    CREATE OR REPLACE TRANSFORM FUNCTION dblink AS LANGUAGE 'C++' NAME 'DBLinkFactory' LIBRARY $(UDXLIBNAME) ; \
-		GRANT EXECUTE ON TRANSFORM FUNCTION dblink() TO PUBLIC ; \
-		GRANT USAGE ON LIBRARY ldblink TO PUBLIC ; \
-	" | vsql -U dbadmin  -X -f - -e
-
-clean:
-	@echo " \
-	    DROP LIBRARY $(UDXLIBNAME) CASCADE ; \
-	" | vsql -U dbadmin  -X -f - -e
-
-
-##@ Development
 
 docker-compile: $(UDXLIBDEV).$(VERSION_TAG) ## Compile dblink with verticasdk docker containers
 
