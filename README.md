@@ -113,19 +113,19 @@ Before you run `make` commands, review the [Makefile](Makefile) and make any nec
 - Then to build using the installed Vertica SDK and devtoolset (centos): just run
     > ```make```
 - Install the library in Vertica (as dbadmin):
-    >```make deploy```
+    >```make install```
 - Create a [Connection Identifier Database](#connection-identifier-database) (a simple text file) under `/usr/local/etc/dblink.cids`. You can use a different location by changing the `DBLINK_CIDS` define in the source code.
    For details, see [Configure DBLINK()](#configure-dblink).
 
 #### Without setting up a build environment
 
-This is for <b>development</b> and <b>testing</b> as it uses some docker images owned by Vertica to build dblink for any specified vertica version.
+This is mainly for <b>testing</b> and <b>release</b>, or when you want to build dblink for a specific vertica version on centos/ubuntu but you do not have the tools to do it. It uses the [verticasdk](https://hub.docker.com/r/vertica/verticasdk) docker image owned by Vertica to build dblink for any specified vertica version.
 1. Compile the DBLINK source code with for the appropriate Vertica version and Linux distribution.
    - To build without needing to set up a build environment, specify the version and target OS.  For example:
         ```
-        $ make VERTICA_VERSION=12.0.2 OSTAG=ubuntu docker-compile
+        $ make -C docker-dblink VERTICA_VERSION=12.0.2 OSTAG=ubuntu
         ```
-        it will create `ldblink.s0.ubuntu-v12.0.2`
+        it will create `ldblink.s0.ubuntu-v12.0.2` in the docker-dblink directory
 
 2. Install the library in Vertica (as dbadmin):
     Follow [Installing pre-built libraries](#installing-pre-built-binaries) from step 2.
