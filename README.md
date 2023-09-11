@@ -87,31 +87,54 @@ You can install `DBLINK()` from the latest released binaries without needing to 
 
 ### Installing pre-built binaries
 
-1. Download the appropriate build of ldblink.so from the [latest release](https://github.com/vertica/dblink/releases) to `ldblink.so`.
-2. Copy `ldblink.so` to the initiator node.
-3. Execute this SQL substituting the full path of ldblink.so on the initiator node:
+1. Download the appropriate build of ldblink.so from the [latest release](https://github.com/vertica/dblink/releases).
+Example:
+ldblink.so.centos-v23.3.0 -> binary for vertica v23.3.0 on CentOS
+2. Rename the binary to `ldblink.so`
+3. Copy `ldblink.so` to the initiator node.
+4. Execute this SQL substituting the full path of ldblink.so on the initiator node:
 ```sql
 	    CREATE OR REPLACE LIBRARY DBLink AS '/full/path/to/ldblink.so' LANGUAGE 'C++';
 	    CREATE OR REPLACE TRANSFORM FUNCTION dblink AS LANGUAGE 'C++' NAME 'DBLinkFactory' LIBRARY DBLink ;
             GRANT EXECUTE ON TRANSFORM FUNCTION dblink() TO PUBLIC ;
 ```
-4. (optional) Delete ldblink.so from initiator node.
+5. Create a [Connection Identifier Database](#connection-identifier-database) (a simple text file) under `/usr/local/etc/dblink.cids`. You can use a different location by changing the `DBLINK_CIDS` define in the source code.
+   For details, see [Configure DBLINK()](#configure-dblink).
+
+6. (optional) Delete ldblink.so from initiator node.
 
 ### Build DBLINK() From Source
 
 Before you run `make` commands, review the [Makefile](Makefile) and make any necessary changes.
 
+#### On your own build environment
+
+- First you need to [Setup a C++ Development Environment](https://docs.vertica.com/23.3.x/en/extending/developing-udxs/developing-with-sdk/cpp-sdk/setting-up-cpp-sdk/)
+- Then to build using the installed Vertica SDK and devtoolset (centos): just run
+    > ```make```
+- Install the library in Vertica (as dbadmin):
+    >```make install```
+- Create a [Connection Identifier Database](#connection-identifier-database) (a simple text file) under `/usr/local/etc/dblink.cids`. You can use a different location by changing the `DBLINK_CIDS` define in the source code.
+   For details, see [Configure DBLINK()](#configure-dblink).
+
+#### Without setting up a build environment
+
+This is mainly for <b>testing</b> and <b>release</b>, or when you want to build dblink for a specific vertica version on centos/ubuntu but you do not have the tools to do it. It uses the [verticasdk](https://hub.docker.com/r/vertica/verticasdk) docker image owned by Vertica to build dblink for any specified vertica version.
 1. Compile the DBLINK source code with for the appropriate Vertica version and Linux distribution.
-   - To build using the installed Vertica SDK and devtoolset (centos), just run `make`
    - To build without needing to set up a build environment, specify the version and target OS.  For example:
-> ```$ make VERTICA_VERSION=12.0.2 OSTAG=ubuntu```
-2. Follow the install proceedures above or use the `install` makefile target to deploy the library in Vertica as dbadmin:
-> ```$ make install```.
+        ```
+        $ make -C docker-dblink VERTICA_VERSION=12.0.2 OSTAG=ubuntu
+        ```
+        it will create `ldblink.s0.ubuntu-v12.0.2` in the docker-dblink directory
+
+2. Install the library in Vertica (as dbadmin):
+    Follow [Installing pre-built libraries](#installing-pre-built-binaries) from step 2.
+
 3. Create a [Connection Identifier Database](#connection-identifier-database) (a simple text file) under `/usr/local/etc/dblink.cids`. You can use a different location by changing the `DBLINK_CIDS` define in the source code.
    For details, see [Configure DBLINK()](#configure-dblink).
 
 ### Uninstall DBLINK()
-You can uninstall the library with `DROP LIBRARAY DBLink` in vsql or by running `make clean`.
+You can uninstall the library with `DROP LIBRARY DBLink` in vsql or by running `make clean`.
 
 ## Configure DBLINK()
 
