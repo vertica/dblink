@@ -32,19 +32,6 @@ using namespace std;
 #define MAX_NUMERIC_CHARLEN 128								// Max NUMERIC size in characters
 #define MAX_ODBC_ERROR_LEN  1024							// Max ODBC Error Length
 
-SQLHENV Oenv = 0 ;				// ODBC Environment handle
-SQLHDBC Ocon = 0 ;				// ODBC Connection  handle
-SQLHSTMT Ost = 0 ;				// ODBC Statement  handle
-bool is_select = false ;		// Command is a SELECT
-std::string query = "" ;		// set in Factory/getReturnType, used (non-DQL) in processPartition
-SQLUSMALLINT Oncol = 0 ;		// Number of result set columns
-SQLSMALLINT *Odt = 0 ;			// Result set Data Type Array pointer
-SQLSMALLINT *Odd = 0 ;			// Result set Decimals Array pointer
-SQLULEN *Ors = 0 ;				// Result Set Column size pointer
-size_t *desz = 0 ;				// Data Element Size Array pointer
-SQLULEN nfr ;					// Number of fetched rows
-SizedColumnTypes colInfo ;		// Set in getReturnType factory, used in processPartition
-
 enum DBs {
 	GENERIC = 0,
 	POSTGRES,
@@ -55,68 +42,220 @@ enum DBs {
 	MYSQL
 };
 
-void clean() {
-	if ( Odt ) {
-		free(Odt) ;
-		Odt = 0 ;
-	}
-	if ( Odd ) {
-		free(Odd) ;
-		Odd = 0 ;
-	}
-	if ( Ors ) {
-		free(Ors);
-		Ors = 0 ;
-	}
-	if ( desz ) {
-		free(desz);
-		desz = 0 ;
-	}
-	if ( Ost ) {
-		(void)SQLFreeHandle(SQL_HANDLE_STMT, Ost);
-		Ost = 0 ;
-	}
-	if ( Ocon ) {
-		(void)SQLDisconnect(Ocon);
-		(void)SQLFreeHandle(SQL_HANDLE_DBC, Ocon);
-		Ocon = 0 ;
-	}
-	if ( Oenv ) {
-		(void)SQLFreeHandle(SQL_HANDLE_ENV, Oenv);
-		Oenv = 0 ;
-	}
-}
-
-void ex_err ( SQLSMALLINT htype, SQLHANDLE Oh, int loc , const char *vtext ) {
-	SQLCHAR Oerr_state[6] ;					// ODBC Error State
-	SQLINTEGER Oerr_native = 0 ;			// ODBC Error Native Code
-	SQLCHAR Oerr_text[MAX_ODBC_ERROR_LEN] ;	// ODBC Error Text
-	SQLRETURN Oret = 0 ;
-	SQLSMALLINT Oln = 0 ;
-
-	Oerr_state[0] = Oerr_text[0] = '\0' ;
-
-	if ( htype == 0 ) {
-		vt_report_error(loc, "DBLINK. %s", vtext);
-	} else if ( ( Oret = SQLGetDiagRec ( htype, Oh, 1, Oerr_state, &Oerr_native, Oerr_text,
-			(SQLSMALLINT)MAX_ODBC_ERROR_LEN, &Oln) ) != SQL_SUCCESS ) {
-		clean();
-		vt_report_error(loc, "DBLINK. %s. Unable to display ODBC error message", vtext);
-	} else {
-		clean();
-		vt_report_error(loc, "DBLINK. %s. State %s. Native Code %d. Error text: %s%c",
-			vtext, (char *)Oerr_state, (int)Oerr_native, (char *) Oerr_text,
-			( Oln > MAX_ODBC_ERROR_LEN ) ? '>' : '.' ) ;
-	}
-}
-
-class DBLink : public TransformFunction
+class ODBCBase
 {
+public:
+	SQLHENV Oenv = 0 ;				// ODBC Environment handle
+	SQLHDBC Ocon = 0 ;				// ODBC Connection handle
+	SQLHSTMT Ost = 0 ;				// ODBC Statement handle
+	std::string cid_value = "" ;    // CID for ODBC connection
+	bool is_select = false ;		// Command is a SELECT
+	std::string query = "" ;		// set in Factory/getReturnType, used (non-DQL) in processPartition
+	SQLUSMALLINT Oncol = 0 ;		// Number of result set columns
+	SQLSMALLINT *Odt = 0 ;			// Result set Data Type Array pointer
+	SQLSMALLINT *Odd = 0 ;			// Result set Decimals Array pointer
+	SQLULEN *Ors = 0 ;				// Result Set Column size pointer
+	size_t *desz = 0 ;				// Data Element Size Array pointer
+	SQLULEN nfr ;					// Number of fetched rows
+	SizedColumnTypes colInfo ;		// Set in getReturnType factory, used in processPartition
 
+	void setupConnection(ServerInterface &srvInterface) {
+		std::string cid = "" ;
+		std::string cid_env = "" ;
+		std::string cid_file = DBLINK_CIDS ;
+		std::string cid_name = "" ;
+		bool connect = false ;
+
+		if (query.length() == 0) {
+			// Read Params:
+			ParamReader params = srvInterface.getParamReader();
+			if( params.containsParameter("cidfile") ) {			// Start checking "cidfile" param
+				cid_file = params.getStringRef("cidfile").str() ;
+#ifdef DBLINK_DEBUG
+	srvInterface.log("DEBUG ODBCBase read param cidfile=<%s>", cid_file.c_str() );
+#endif
+			}
+			if( params.containsParameter("cid") ) {				// Start checking "cid" param
+				cid = params.getStringRef("cid").str() ;
+#ifdef DBLINK_DEBUG
+	srvInterface.log("DEBUG ODBCBase read param cid=<%s>", cid.c_str() );
+#endif
+			} else if( params.containsParameter("connect_secret") ) {	// if "cid" is undef try with "connect_secret"
+				connect = true ;
+				cid = params.getStringRef("connect_secret").str() ;
+			} else if( params.containsParameter("connect") ) {	// if "cid" is undef try with "connect"
+				connect = true ;
+				cid = params.getStringRef("connect").str() ;
+			} else if (srvInterface.getUDSessionParamReader("library").containsParameter("dblink_secret")) {
+				// if "cid", "connect_secret" and "connect" are not defined try "dblink_secret" session param
+				connect = true ;
+				cid = srvInterface.getUDSessionParamReader("library").getStringRef("dblink_secret").str() ;
+			} else {
+				vt_report_error(101, "DBLINK. Missing connection parameters");
+			}
+			if( params.containsParameter("query") ) {
+				query = params.getStringRef("query").str() ;
+#ifdef DBLINK_DEBUG
+	srvInterface.log("DEBUG ODBCBase read param query=<%s>", query.c_str() );
+#endif
+			} else {
+				vt_report_error(102, "DBLINK. Missing query parameter");
+			}
+
+			// Check connection parameters
+			if ( connect ) {    // old VFQ connect style: connect='@/tmp/file.txt' will read CIDs from a different file
+				if ( cid[0] == '@' ) {
+					std::ifstream cids(cid.substr(1)) ;
+					if ( cids.is_open() ) {
+						std::stringstream ssFile;
+						ssFile << cids.rdbuf() ;
+						cid_value = ssFile.str() ;
+						cid_value.erase(std::remove(cid_value.begin(), cid_value.end(), '\n'), cid_value.end());
+					} else {
+						vt_report_error(103, "DBLINK. Error reading <%s>", cid.substr(1).c_str());
+					}
+				} else {
+					cid_value = cid ;
+				}
+			} else {            // new CID connect style:
+				std::ifstream cids(cid_file) ;
+				if ( cids.is_open() ) {
+					std::string cline ;
+					size_t pos ;
+					while ( getline(cids, cline) ) {
+						if ( cline[0] == '#' || cline.empty() )
+							continue ;	// skip empty lines & comments
+						if ( ( pos = cline.find(":") ) != std::string::npos ) {
+							cid_name = cline.substr(0, pos) ;
+							if ( cid_name == cid )
+								cid_value = cline.substr(pos + 1, std::string::npos ) ;
+							else if ( cid_name == cid + "$" ) {
+								cid_env = cline.substr(pos + 1, std::string::npos ) ;
+								std::stringstream se_stream ( cid_env ) ; 
+								std::string token ;
+								while ( std::getline ( se_stream, token, ';' ) ) { 
+									size_t pos = 0 ; 
+									if ( ( pos = token.find('=') ) && pos != std::string::npos ) { 
+#ifdef DBLINK_DEBUG
+	srvInterface.log("DEBUG ODBCBase setting <%s> to <%s>", token.substr(0, pos).c_str(), token.substr(pos+1).c_str() );
+#endif
+										setenv ( token.substr(0, pos).c_str(), token.substr(pos + 1).c_str(), 1); 
+									}   
+								}   
+							}
+						} else {
+							continue ;	// skip malformed lines
+						}
+					}
+					cids.close() ;
+				} else {
+					vt_report_error(104, "DBLINK. Error reading <%s>", cid_file);
+				}
+				if ( cid_value.empty() ) {
+					vt_report_error(105, "DBLINK. Error finding CID <%s> in <%s>", cid.c_str(), DBLINK_CIDS);
+				}
+			}
+
+			// Check if "query" is a script file name:
+        	if ( query[0] == '@' ) {
+        	    std::ifstream qscript(query.substr(1)) ;
+				if ( qscript.is_open() ) {
+					std::stringstream ssFile;
+					ssFile << qscript.rdbuf() ;
+					query = ssFile.str() ;
+				} else {
+					vt_report_error(106, "DBLINK. Error reading query from <%s>", query.substr(1).c_str());
+				}
+			}
+
+			// Determine Statement type:
+			query.erase(0, query.find_first_not_of(" \n\t\r")) ;
+			if ( !strncasecmp(query.c_str(), "SELECT", 6) ) {
+				is_select = true ;
+			}
+		}
+	}
+
+	void connect() {
+		SQLRETURN Oret = 0 ;
+
+		if (!Ocon) {
+			if (!SQL_SUCCEEDED(Oret=SQLAllocHandle(SQL_HANDLE_ENV, (SQLHANDLE)SQL_NULL_HANDLE, &Oenv))){
+				ex_err(0, 0, 107, "Error allocating Environment Handle");
+			}
+			if (!SQL_SUCCEEDED(Oret=SQLSetEnvAttr(Oenv, SQL_ATTR_ODBC_VERSION, (void *) SQL_OV_ODBC3, SQL_IS_UINTEGER))){
+				ex_err(0, 0, 108, "Error setting SQL_OV_ODBC3");
+			}
+			if (!SQL_SUCCEEDED(Oret=SQLAllocHandle(SQL_HANDLE_DBC, Oenv, &Ocon))){
+				ex_err(0, 0, 109, "Error allocating Connection Handle");
+			}
+			if (!SQL_SUCCEEDED(Oret=SQLDriverConnect(Ocon, (SQLHWND)NULL, (SQLCHAR *)cid_value.c_str(), SQL_NTS, NULL, 0, NULL, SQL_DRIVER_NOPROMPT))){
+				ex_err(SQL_HANDLE_DBC, Ocon, 110, "Error connecting to target database");
+			}
+		}
+	}
+
+	void clean() {
+		if ( Odt ) {
+			free(Odt) ;
+			Odt = 0 ;
+		}
+		if ( Odd ) {
+			free(Odd) ;
+			Odd = 0 ;
+		}
+		if ( Ors ) {
+			free(Ors);
+			Ors = 0 ;
+		}
+		if ( desz ) {
+			free(desz);
+			desz = 0 ;
+		}
+		if ( Ost ) {
+			(void)SQLFreeHandle(SQL_HANDLE_STMT, Ost);
+			Ost = 0 ;
+		}
+		if ( Ocon ) {
+			(void)SQLDisconnect(Ocon);
+			(void)SQLFreeHandle(SQL_HANDLE_DBC, Ocon);
+			Ocon = 0 ;
+		}
+		if ( Oenv ) {
+			(void)SQLFreeHandle(SQL_HANDLE_ENV, Oenv);
+			Oenv = 0 ;
+		}
+
+		query = "";
+	}
+
+	void ex_err ( SQLSMALLINT htype, SQLHANDLE Oh, int loc , const char *vtext ) {
+		SQLCHAR Oerr_state[6] ;					// ODBC Error State
+		SQLINTEGER Oerr_native = 0 ;			// ODBC Error Native Code
+		SQLCHAR Oerr_text[MAX_ODBC_ERROR_LEN] ;	// ODBC Error Text
+		SQLRETURN Oret = 0 ;
+		SQLSMALLINT Oln = 0 ;
+
+		Oerr_state[0] = Oerr_text[0] = '\0' ;
+
+		if ( htype == 0 ) {
+			vt_report_error(loc, "DBLINK. %s", vtext);
+		} else if ( ( Oret = SQLGetDiagRec ( htype, Oh, 1, Oerr_state, &Oerr_native, Oerr_text,
+				(SQLSMALLINT)MAX_ODBC_ERROR_LEN, &Oln) ) != SQL_SUCCESS ) {
+			clean();
+			vt_report_error(loc, "DBLINK. %s. Unable to display ODBC error message", vtext);
+		} else {
+			clean();
+			vt_report_error(loc, "DBLINK. %s. State %s. Native Code %d. Error text: %s%c",
+				vtext, (char *)Oerr_state, (int)Oerr_native, (char *) Oerr_text,
+				( Oln > MAX_ODBC_ERROR_LEN ) ? '>' : '.' ) ;
+		}
+	}
+};
+
+class DBLink : public TransformFunction, ODBCBase
+{
 	DBs dbt ;
-	SQLPOINTER *Ores ;     // result array pointers pointer
-	SQLLEN **Olen ;        // length array pointers pointer
-	StringParsers parser ;
 	size_t rowset ;		// Fetch rowset
 
 	virtual void setup(ServerInterface &srvInterface, const SizedColumnTypes &argTypes)
@@ -124,6 +263,9 @@ class DBLink : public TransformFunction
 		SQLRETURN Oret = 0 ;
 		SQLHSTMT Ostmt = 0 ;
 		SQLCHAR Obuff[64];
+
+		setupConnection(srvInterface);
+		connect();
 
 		memset(&Obuff[0], 0, sizeof(Obuff));
 
@@ -178,10 +320,41 @@ class DBLink : public TransformFunction
 		SQLRETURN Oret = 0 ;
 		SQLPOINTER Odp = 0 ; // Data Element Pointer
 		SQLULEN    Odl = 0 ; // Data Element Length
+		SQLPOINTER *Ores ;   // result array pointers pointer
+		SQLLEN **Olen ;      // length array pointers pointer
+		SQLSMALLINT Onamel = 0 ;
+		SQLSMALLINT Onull  = 0 ;
+		SQLCHAR Ocname[MAXCNAMELEN] ;
+		StringParsers parser ;
+
+		colInfo = outputWriter.getTypeMetaData();
 
 		try
 		{
+			// ODBC Statement preparation:
+			if (!SQL_SUCCEEDED(Oret=SQLAllocHandle(SQL_HANDLE_STMT, Ocon, &Ost))){
+				ex_err(SQL_HANDLE_DBC, Ocon, 401, "Error allocating Statement Handle");
+			}
+
 			if ( is_select ) {
+				if (!SQL_SUCCEEDED(Oret=SQLPrepare(Ost, (SQLCHAR *)query.c_str(), SQL_NTS))) {
+					ex_err(SQL_HANDLE_STMT, Ost, 402, "Error preparing the statement");
+	    		}
+				if (!SQL_SUCCEEDED(Oret=SQLNumResultCols(Ost, (SQLSMALLINT *)&Oncol))) {
+					ex_err(SQL_HANDLE_STMT, Ost, 403, "Error finding the number of resulting columns");
+				}
+				if ( (Odt = (SQLSMALLINT *)calloc ((size_t)Oncol, sizeof(SQLSMALLINT))) == (void *)NULL ) {
+					ex_err(0, 0, 404, "Error allocating data types array");
+	    		}
+				if ( (Ors = (SQLULEN *)calloc ((size_t)Oncol, sizeof(SQLULEN))) == (void *)NULL ) {
+					ex_err(0, 0, 405, "Error allocating result set columns size array");
+	    		}
+				if ( (desz = (size_t *)calloc ((size_t)Oncol, sizeof(size_t))) == (void *)NULL ) {
+					ex_err(0, 0, 406, "Error allocating data element size array");
+	    		}
+				if ( (Odd = (SQLSMALLINT *)calloc ((size_t)Oncol, sizeof(SQLSMALLINT))) == (void *)NULL ) {
+					ex_err(0, 0, 407, "Error allocating result set decimal size array");
+	    		}
 
 				// Allocate memory for Result Set and length array pointers:
 				Ores = (SQLPOINTER *)srvInterface.allocator->alloc(Oncol * sizeof(SQLPOINTER)) ;
@@ -189,6 +362,15 @@ class DBLink : public TransformFunction
 
 				// Allocate space for each column and bind it:
 				for ( unsigned int j = 0 ; j < Oncol ; j++ ) {
+					if ( !SQL_SUCCEEDED(Oret=SQLDescribeCol(Ost, (SQLUSMALLINT)(j+1),
+	                		Ocname, (SQLSMALLINT) MAXCNAMELEN, &Onamel,
+	                		&Odt[j], &Ors[j], &Odd[j], &Onull))) {
+						ex_err(SQL_HANDLE_STMT, Ost, 120, "Error getting column description");
+					}
+#ifdef DBLINK_DEBUG
+  srvInterface.log("DEBUG DBLink SQLDescribeCol src column=%u name=%s data_type=%d length=%zu", j, (char *)Ocname, Odt[j], Ors[j]);
+#endif
+
 					Olen[j] = (SQLLEN *)srvInterface.allocator->alloc(sizeof(SQLLEN) * rowset);
 					switch(Odt[j]) {
 						case SQL_SMALLINT:
@@ -199,7 +381,7 @@ class DBLink : public TransformFunction
 								desz[j] = (size_t)(Ors[j] + 1) ;
 							Ores[j] = (SQLPOINTER)srvInterface.allocator->alloc(desz[j] * rowset);
 							if (!SQL_SUCCEEDED(Oret=SQLBindCol(Ost, j+1, (dbt==ORACLE) ? SQL_C_CHAR : SQL_C_SBIGINT, Ores[j], desz[j], Olen[j]))){
-								ex_err(SQL_HANDLE_STMT, Ost, 401, "Error binding column");
+								ex_err(SQL_HANDLE_STMT, Ost, 411, "Error binding column");
 							}
 							break ;
 						case SQL_REAL:
@@ -207,13 +389,14 @@ class DBLink : public TransformFunction
 						case SQL_FLOAT:
 							Ores[j] = (SQLPOINTER)srvInterface.allocator->alloc(desz[j] * rowset);
 							if (!SQL_SUCCEEDED(Oret=SQLBindCol(Ost, j+1, SQL_C_DOUBLE, Ores[j], desz[j], Olen[j])))
-								ex_err(SQL_HANDLE_STMT, Ost, 401, "Error binding column");
+								ex_err(SQL_HANDLE_STMT, Ost, 411, "Error binding column");
 							break ;
 						case SQL_NUMERIC:
 						case SQL_DECIMAL:
+							desz[j] = (size_t)(Ors[j] + 1);
 							Ores[j] = (SQLPOINTER)srvInterface.allocator->alloc(desz[j] * rowset);
 							if (!SQL_SUCCEEDED(Oret=SQLBindCol(Ost, j+1, SQL_C_CHAR, Ores[j], desz[j], Olen[j])))
-								ex_err(SQL_HANDLE_STMT, Ost, 401, "Error binding column");
+								ex_err(SQL_HANDLE_STMT, Ost, 411, "Error binding column");
 							break ;
 						case SQL_WCHAR:
 						case SQL_WVARCHAR:
@@ -221,65 +404,67 @@ class DBLink : public TransformFunction
 						case SQL_CHAR:
 						case SQL_VARCHAR:
 						case SQL_LONGVARCHAR:
+							desz[j] = (size_t)(Ors[j] + 1);
 							Ores[j] = (SQLPOINTER)srvInterface.allocator->alloc(desz[j] * rowset);
 							if (!SQL_SUCCEEDED(Oret=SQLBindCol(Ost, j+1, SQL_C_CHAR, Ores[j], desz[j], Olen[j])))
-								ex_err(SQL_HANDLE_STMT, Ost, 401, "Error binding column");
+								ex_err(SQL_HANDLE_STMT, Ost, 411, "Error binding column");
 							break ;
 						case SQL_TYPE_TIME:
 							Ores[j] = (SQLPOINTER)srvInterface.allocator->alloc(desz[j] * rowset);
 							if (!SQL_SUCCEEDED(Oret=SQLBindCol(Ost, j+1, SQL_C_TIME, Ores[j], desz[j], Olen[j])))
-								ex_err(SQL_HANDLE_STMT, Ost, 401, "Error binding column");
+								ex_err(SQL_HANDLE_STMT, Ost, 411, "Error binding column");
 							break ;
 						case SQL_TYPE_DATE:
 							Ores[j] = (SQLPOINTER)srvInterface.allocator->alloc(desz[j] * rowset);
 							if (!SQL_SUCCEEDED(Oret=SQLBindCol(Ost, j+1, SQL_C_DATE, Ores[j], desz[j], Olen[j])))
-								ex_err(SQL_HANDLE_STMT, Ost, 401, "Error binding column");
+								ex_err(SQL_HANDLE_STMT, Ost, 411, "Error binding column");
 							break ;
 						case SQL_TYPE_TIMESTAMP:
 							Ores[j] = (SQLPOINTER)srvInterface.allocator->alloc(desz[j] * rowset);
 							if (!SQL_SUCCEEDED(Oret=SQLBindCol(Ost, j+1, SQL_C_TIMESTAMP, Ores[j], desz[j], Olen[j])))
-								ex_err(SQL_HANDLE_STMT, Ost, 401, "Error binding column");
+								ex_err(SQL_HANDLE_STMT, Ost, 411, "Error binding column");
 							break ;
 						case SQL_BIT:
 							Ores[j] = (SQLPOINTER)srvInterface.allocator->alloc(desz[j] * rowset);
 							if (!SQL_SUCCEEDED(Oret=SQLBindCol(Ost, j+1, SQL_C_BIT, Ores[j], desz[j], Olen[j])))
-								ex_err(SQL_HANDLE_STMT, Ost, 401, "Error binding column");
+								ex_err(SQL_HANDLE_STMT, Ost, 411, "Error binding column");
 							break ;
 						case SQL_BINARY:
 						case SQL_VARBINARY:
 						case SQL_LONGVARBINARY:
 							Ores[j] = (SQLPOINTER)srvInterface.allocator->alloc(desz[j] * rowset);
 							if (!SQL_SUCCEEDED(Oret=SQLBindCol(Ost, j+1, SQL_C_BINARY, Ores[j], desz[j], Olen[j])))
-								ex_err(SQL_HANDLE_STMT, Ost, 401, "Error binding column");
+								ex_err(SQL_HANDLE_STMT, Ost, 411, "Error binding column");
 							break ;
 						case SQL_INTERVAL_YEAR_TO_MONTH:
 							// FIX: support this data type
 							Ores[j] = (SQLPOINTER)srvInterface.allocator->alloc(desz[j] * rowset);
 							if (!SQL_SUCCEEDED(Oret=SQLBindCol(Ost, j+1, SQL_C_INTERVAL_YEAR_TO_MONTH, Ores[j], desz[j], Olen[j])))
-								ex_err(SQL_HANDLE_STMT, Ost, 401, "Error binding column");
+								ex_err(SQL_HANDLE_STMT, Ost, 411, "Error binding column");
 							break ;
 						case SQL_INTERVAL_DAY_TO_SECOND:
 							// FIX: support this data type
 							Ores[j] = (SQLPOINTER)srvInterface.allocator->alloc(desz[j] * rowset);
 							if (!SQL_SUCCEEDED(Oret=SQLBindCol(Ost, j+1, SQL_C_INTERVAL_DAY_TO_SECOND, Ores[j], desz[j], Olen[j])))
-								ex_err(SQL_HANDLE_STMT, Ost, 401, "Error binding column");
+								ex_err(SQL_HANDLE_STMT, Ost, 411, "Error binding column");
 							break;
 					}
 				}
+
 				// Set Statement attributes:
 				if (!SQL_SUCCEEDED(Oret=SQLSetStmtAttr(Ost, SQL_ATTR_ROW_BIND_TYPE, (SQLPOINTER)SQL_BIND_BY_COLUMN, 0))) {
-					ex_err(SQL_HANDLE_STMT, Ost, 402, "Error setting statement attribute SQL_ATTR_ROW_BIND_TYPE");
+					ex_err(SQL_HANDLE_STMT, Ost, 412, "Error setting statement attribute SQL_ATTR_ROW_BIND_TYPE");
 				}
 				if (!SQL_SUCCEEDED(Oret=SQLSetStmtAttr(Ost, SQL_ATTR_ROW_ARRAY_SIZE, (SQLPOINTER)rowset, 0))) {
-					ex_err(SQL_HANDLE_STMT, Ost, 402, "Error setting statement attribute SQL_ATTR_ROW_ARRAY_SIZE");
+					ex_err(SQL_HANDLE_STMT, Ost, 412, "Error setting statement attribute SQL_ATTR_ROW_ARRAY_SIZE");
 				}
 				if (!SQL_SUCCEEDED(Oret=SQLSetStmtAttr(Ost, SQL_ATTR_ROWS_FETCHED_PTR, &nfr, 0))) {
-					ex_err(SQL_HANDLE_STMT, Ost, 402, "Error setting statement attribute SQL_ATTR_ROWS_FETCHED_PTR");
+					ex_err(SQL_HANDLE_STMT, Ost, 412, "Error setting statement attribute SQL_ATTR_ROWS_FETCHED_PTR");
 				}
 
-				// Execute Stateent:
+				// Execute Statement:
 				if (!SQL_SUCCEEDED(Oret=SQLExecute(Ost)) && Oret != SQL_NO_DATA ) {
-					ex_err(SQL_HANDLE_STMT, Ost, 403, "Error executing the statement");
+					ex_err(SQL_HANDLE_STMT, Ost, 413, "Error executing the statement");
 				}
 
 				// Fetch loop:
@@ -294,7 +479,6 @@ class DBLink : public TransformFunction
 								continue ;
 							}
 
-							
 							switch(Odt[j]) {
 								case SQL_SMALLINT:
 								case SQL_INTEGER:
@@ -318,10 +502,9 @@ class DBLink : public TransformFunction
 										if ( *(char *)Odp == '\0' ) { // some DBs might use empty strings for NUMERIC nulls
 											outputWriter.setNull(j) ;
 										} else {
-
 											if (!parser.parseNumeric((char*)Odp, (size_t)Odl, j,
 													outputWriter.getNumericRef(j), colInfo.getColumnType(j), rejectReason)) {
-												ex_err(0, 0, 404, "Error parsing Numeric");
+												ex_err(0, 0, 414, "Error parsing Numeric");
 											}
 										}
 										break ;
@@ -368,7 +551,7 @@ class DBLink : public TransformFunction
 									{
                         				SQL_INTERVAL_STRUCT &intv = *(SQL_INTERVAL_STRUCT*)Odp;
 										if (intv.interval_type != SQL_IS_YEAR_TO_MONTH) {
-											ex_err(0, 0, 405, "Unsupported INTERVAL data type. Expecting SQL_IS_YEAR_TO_MONTH");
+											ex_err(0, 0, 415, "Unsupported INTERVAL data type. Expecting SQL_IS_YEAR_TO_MONTH");
 										}
 										Interval ret = (  (intv.intval.year_month.year*MONTHS_PER_YEAR)
 														+ (intv.intval.year_month.month))
@@ -380,7 +563,7 @@ class DBLink : public TransformFunction
 									{
                         				SQL_INTERVAL_STRUCT &intv = *(SQL_INTERVAL_STRUCT*)Odp;
 										if (intv.interval_type != SQL_IS_DAY_TO_SECOND) {
-											ex_err(0, 0, 406, "Unsupported INTERVAL data type. Expecting SQL_IS_DAY_TO_SECOND");
+											ex_err(0, 0, 416, "Unsupported INTERVAL data type. Expecting SQL_IS_DAY_TO_SECOND");
 										}
 										
 										Interval ret = (  (intv.intval.day_second.day*usPerDay)
@@ -393,7 +576,7 @@ class DBLink : public TransformFunction
 										break ;
 									}
 								default:
-									vt_report_error(407, "DBLINK. Unsupported data type for column %u", j);
+									vt_report_error(417, "DBLINK. Unsupported data type for column %u", j);
 									break ;
 							}
 						}
@@ -401,7 +584,7 @@ class DBLink : public TransformFunction
 				}
 			} else {
 				if (!SQL_SUCCEEDED(Oret=SQLExecDirect (Ost, (SQLCHAR *)query.c_str(), SQL_NTS))) {
-					ex_err(SQL_HANDLE_STMT, Ost, 408, "Error executing statement");
+					ex_err(SQL_HANDLE_STMT, Ost, 418, "Error executing statement");
 				}
 				outputWriter.setInt(0, (vint)Oret) ;
 				outputWriter.next() ;
@@ -416,148 +599,26 @@ class DBLink : public TransformFunction
 	}
 };
 
-class DBLinkFactory : public TransformFunctionFactory
+class DBLinkFactory : public TransformFunctionFactory, ODBCBase
 {
 	virtual void getPrototype(ServerInterface &srvInterface,
                               ColumnTypes &argTypes,
-                              ColumnTypes &returnType )
+                              ColumnTypes &returnType)
 	{
 		returnType.addAny();
 	}
+
 	virtual void getReturnType(ServerInterface &srvInterface,
                                const SizedColumnTypes &inputTypes,
-                               SizedColumnTypes &outputTypes )
+                               SizedColumnTypes &outputTypes)
 	{
 		SQLRETURN Oret = 0 ;
 		SQLSMALLINT Onamel = 0 ;
 		SQLSMALLINT Onull = 0 ;
 		SQLCHAR Ocname[MAXCNAMELEN] ;
-		std::string cid = "" ;
-		std::string cid_env = "" ;
-		std::string cid_file = DBLINK_CIDS ;
-		std::string cid_name = "" ;
-		std::string cid_value = "" ;
-		bool connect = false ;
 
-		// Read Params:
-		ParamReader params = srvInterface.getParamReader();
-		if( params.containsParameter("cidfile") ) {			// Start checking "cidfile" param
-			cid_file = params.getStringRef("cidfile").str() ;
-#ifdef DBLINK_DEBUG
-  srvInterface.log("DEBUG DBLINK read param cidfile=<%s>", cid_file.c_str() );
-#endif
-		}
-		if( params.containsParameter("cid") ) {				// Start checking "cid" param
-			cid = params.getStringRef("cid").str() ;
-#ifdef DBLINK_DEBUG
-  srvInterface.log("DEBUG DBLINK read param cid=<%s>", cid.c_str() );
-#endif
-		} else if( params.containsParameter("connect_secret") ) {	// if "cid" is undef try with "connect_secret"
-			connect = true ;
-			cid = params.getStringRef("connect_secret").str() ;
-		} else if( params.containsParameter("connect") ) {	// if "cid" is undef try with "connect"
-			connect = true ;
-			cid = params.getStringRef("connect").str() ;
-		} else if (srvInterface.getUDSessionParamReader("library").containsParameter("dblink_secret")) {
-			// if "cid", "connect_secret" and "connect" are not defined try "dblink_secret" session param
-			connect = true ;
-			cid = srvInterface.getUDSessionParamReader("library").getStringRef("dblink_secret").str() ;
-		} else {
-			vt_report_error(101, "DBLINK. Missing connection parameters");
-		}
-		if( params.containsParameter("query") ) {
-			query = params.getStringRef("query").str() ;
-#ifdef DBLINK_DEBUG
-  srvInterface.log("DEBUG DBLINK read param query=<%s>", query.c_str() );
-#endif
-		} else {
-			vt_report_error(102, "DBLINK. Missing query parameter");
-		}
-
-		// Check connection parameters
-		if ( connect ) { 	// old VFQ connect style: connect='@/tmp/file.txt' will read CIDs from a different file
-			if ( cid[0] == '@' ) {
-				std::ifstream cids(cid.substr(1)) ;
-				if ( cids.is_open() ) {
-					std::stringstream ssFile;
-					ssFile << cids.rdbuf() ;
-					cid_value = ssFile.str() ;
-					cid_value.erase(std::remove(cid_value.begin(), cid_value.end(), '\n'), cid_value.end());
-				} else {
-					vt_report_error(103, "DBLINK. Error reading <%s>", cid.substr(1).c_str());
-				}
-			} else {
-				cid_value = cid ;
-			}
-		} else {			// new CID connect style:
-			std::ifstream cids(cid_file) ;
-			if ( cids.is_open() ) {
-				std::string cline ;
-				size_t pos ;
-				while ( getline(cids, cline) ) {
-					if ( cline[0] == '#' || cline.empty() )
-						continue ;	// skip empty lines & comments
-					if ( ( pos = cline.find(":") ) != std::string::npos ) {
-						cid_name = cline.substr(0, pos) ;
-						if ( cid_name == cid )
-							cid_value = cline.substr(pos + 1, std::string::npos ) ;
-						else if ( cid_name == cid + "$" ) {
-							cid_env = cline.substr(pos + 1, std::string::npos ) ;
-							std::stringstream se_stream ( cid_env ) ; 
-							std::string token ;
-							while ( std::getline ( se_stream, token, ';' ) ) { 
-								size_t pos = 0 ; 
-								if ( ( pos = token.find('=') ) && pos != std::string::npos ) { 
-#ifdef DBLINK_DEBUG
-  srvInterface.log("DEBUG DBLINK setting <%s> to <%s>", token.substr(0, pos).c_str(), token.substr(pos+1).c_str() );
-#endif
-									setenv ( token.substr(0, pos).c_str(), token.substr(pos + 1).c_str(), 1); 
-								}   
-							}   
-						}
-					} else {
-						continue ;	// skip malformed lines
-					}
-				}
-				cids.close() ;
-			} else {
-				vt_report_error(104, "DBLINK. Error reading <%s>", cid_file);
-			}
-			if ( cid_value.empty() ) {
-				vt_report_error(105, "DBLINK. Error finding CID <%s> in <%s>", cid.c_str(), DBLINK_CIDS);
-			}
-		}
-
-		// Check if "query" is a script file name:
-        if ( query[0] == '@' ) {
-            std::ifstream qscript(query.substr(1)) ;
-			if ( qscript.is_open() ) {
-				std::stringstream ssFile;
-				ssFile << qscript.rdbuf() ;
-				query = ssFile.str() ;
-			} else {
-				vt_report_error(106, "DBLINK. Error reading query from <%s>", query.substr(1).c_str());
-			}
-		}
-
-		// ODBC Connection:
-		if (!SQL_SUCCEEDED(Oret=SQLAllocHandle(SQL_HANDLE_ENV, (SQLHANDLE)SQL_NULL_HANDLE, &Oenv))){
-			ex_err(0, 0, 107, "Error allocating Environment Handle");
-		}
-		if (!SQL_SUCCEEDED(Oret=SQLSetEnvAttr(Oenv, SQL_ATTR_ODBC_VERSION, (void *) SQL_OV_ODBC3, 0))){
-			ex_err(0, 0, 108, "Error setting SQL_OV_ODBC3");
-		}
-		if (!SQL_SUCCEEDED(Oret=SQLAllocHandle(SQL_HANDLE_DBC, Oenv, &Ocon))){
-			ex_err(0, 0, 109, "Error allocating Connection Handle");
-		}
-		if (!SQL_SUCCEEDED(Oret=SQLDriverConnect(Ocon, (SQLHWND)NULL, (SQLCHAR *)cid_value.c_str(), SQL_NTS, NULL, 0, NULL, SQL_DRIVER_NOPROMPT))){
-			ex_err(SQL_HANDLE_DBC, Ocon, 110, "Error connecting to target database");
-		}
-
-		// Determine Statement type:
-		query.erase(0, query.find_first_not_of(" \n\t\r")) ;
-		if ( !strncasecmp(query.c_str(), "SELECT", 6) )
-			is_select = true ;
+		setupConnection(srvInterface);
+		connect();
 
 		// ODBC Statement preparation:
 		if (!SQL_SUCCEEDED(Oret=SQLAllocHandle(SQL_HANDLE_STMT, Ocon, &Ost))){
@@ -590,7 +651,7 @@ class DBLinkFactory : public TransformFunctionFactory
 					ex_err(SQL_HANDLE_STMT, Ost, 120, "Error getting column description");
 				}
 #ifdef DBLINK_DEBUG
-  srvInterface.log("DEBUG DBLINK SQLDescribeCol src column=%u name=%s data_type=%d length=%zu", j, (char *)Ocname, Odt[j], Ors[j]);
+  srvInterface.log("DEBUG DBLinkFactory SQLDescribeCol src column=%u name=%s data_type=%d length=%zu", j, (char *)Ocname, Odt[j], Ors[j]);
 #endif
 				std::string cname((char *)Ocname);
 				switch(Odt[j]) {
@@ -620,7 +681,7 @@ class DBLinkFactory : public TransformFunctionFactory
 								ex_err(SQL_HANDLE_STMT, Ost, 120, "Error getting column description");
 						}
 #ifdef DBLINK_DEBUG
-  srvInterface.log("DEBUG DBLINK SQLColAttribute SQL_DESC_OCTET_LENGTH src column=%u name=%s data_type=%d length=%ld", j, (char *)Ocname, Odt[j], Ool);
+  srvInterface.log("DEBUG DBLinkFactory SQLColAttribute SQL_DESC_OCTET_LENGTH src column=%u name=%s data_type=%d length=%ld", j, (char *)Ocname, Odt[j], Ool);
 #endif
 						if ( Ool > 0 && (SQLULEN)Ool > Ors[j] ) 
 							Ors[j] = Ool ;
@@ -640,7 +701,7 @@ class DBLinkFactory : public TransformFunctionFactory
 								ex_err(SQL_HANDLE_STMT, Ost, 120, "Error getting column description");
 						}
 #ifdef DBLINK_DEBUG
-  srvInterface.log("DEBUG DBLINK SQLColAttribute SQL_DESC_OCTET_LENGTH src column=%u name=%s data_type=%d length=%ld", j, (char *)Ocname, Odt[j], Ool);
+  srvInterface.log("DEBUG DBLinkFactory SQLColAttribute SQL_DESC_OCTET_LENGTH src column=%u name=%s data_type=%d length=%ld", j, (char *)Ocname, Odt[j], Ool);
 #endif
 						if ( Ool > 0 && (SQLULEN)Ool > Ors[j] ) 
 							Ors[j] = Ool ;
@@ -660,7 +721,7 @@ class DBLinkFactory : public TransformFunctionFactory
 								ex_err(SQL_HANDLE_STMT, Ost, 120, "Error getting column description");
 						}
 #ifdef DBLINK_DEBUG
-  srvInterface.log("DEBUG DBLINK SQLColAttribute SQL_DESC_OCTET_LENGTH src column=%u name=%s data_type=%d length=%ld", j, (char *)Ocname, Odt[j], Ool);
+  srvInterface.log("DEBUG DBLinkFactory SQLColAttribute SQL_DESC_OCTET_LENGTH src column=%u name=%s data_type=%d length=%ld", j, (char *)Ocname, Odt[j], Ool);
 #endif
 						if ( Ool > 0 && (SQLULEN)Ool > Ors[j] ) 
 							Ors[j] = Ool ;
@@ -723,13 +784,16 @@ class DBLinkFactory : public TransformFunctionFactory
 						break ;
 					default:
 						vt_report_error(121, "DBLINK. Unsupported data type for column %u", j);
+						clean();
 				}
         	}
 			colInfo = outputTypes ;
 		} else {
 			outputTypes.addInt("dblink") ;
 		}
+		clean();
 	}
+
     virtual void getParameterType(ServerInterface &srvInterface, SizedColumnTypes &parameterTypes)
 	{
 		parameterTypes.addVarchar(1024, "cid",  { true, false, false, "Connection Identifier Database. Identifies an entry in the connection identifier database." });
