@@ -740,18 +740,15 @@ class DBLinkFactory : public TransformFunctionFactory, ODBCBase
                     case SQL_TINYINT:
                     case SQL_BIGINT:
                         // we change this later on if the remote db is Oracle
-                        desz[j] = sizeof(vint) ;
                         outputTypes.addInt(cname) ;
                         break ;
                     case SQL_REAL:
                     case SQL_DOUBLE:
                     case SQL_FLOAT:
-                        desz[j] = sizeof(vfloat) ;
                         outputTypes.addFloat(cname) ;
                         break ;
                     case SQL_NUMERIC:
                     case SQL_DECIMAL:
-                        desz[j] = MAX_NUMERIC_CHARLEN ;
                         outputTypes.addNumeric((int32)Ors[j], (int32)Odd[j], cname) ;
                         break ;
                     case SQL_CHAR:
@@ -769,7 +766,6 @@ class DBLinkFactory : public TransformFunctionFactory, ODBCBase
                             srvInterface.log("DBLINK SQL_[W]CHAR column %s of length %zu limited to 65000 bytes", (char *)Ocname, Ors[j]);
                             Ors[j] = 65000;
                         }
-                        desz[j] = (size_t)(Ors[j] + 1) ;
                         if ( !Ors[j] )
                             Ors[j] = 1 ;
                         outputTypes.addChar((int32)Ors[j], cname) ;
@@ -789,7 +785,6 @@ class DBLinkFactory : public TransformFunctionFactory, ODBCBase
                             srvInterface.log("DBLINK SQL_[W]VARCHAR column %s of length %zu limited to 65000 bytes", (char *)Ocname, Ors[j]);
                             Ors[j] = 65000;
                         }
-                        desz[j] = (size_t)(Ors[j] + 1) ;
                         if ( !Ors[j] )
                             Ors[j] = 1 ;
                         outputTypes.addVarchar((int32)Ors[j], cname) ;
@@ -809,25 +804,20 @@ class DBLinkFactory : public TransformFunctionFactory, ODBCBase
                             srvInterface.log("DBLINK SQL_LONG[W]VARCHAR column %s of length %zu limited to 32000000 bytes", (char *)Ocname, Ors[j]);
                             Ors[j] = 32000000;
                         }
-                        desz[j] = (size_t)(Ors[j] + 1) ;
                         if ( !Ors[j] )
                             Ors[j] = 1 ;
                         outputTypes.addLongVarchar((int32)Ors[j], cname) ;
                         break ;
                     case SQL_TYPE_TIME:
-                        desz[j] = sizeof(SQL_TIME_STRUCT) ;
                         outputTypes.addTime((int32)Odd[j], cname) ;
                         break ;
                     case SQL_TYPE_DATE:
-                        desz[j] = sizeof(SQL_DATE_STRUCT) ;
                         outputTypes.addDate(cname) ;
                         break ;
                     case SQL_TYPE_TIMESTAMP:
-                        desz[j] = sizeof(SQL_TIMESTAMP_STRUCT) ;
                         outputTypes.addTimestamp((int32)Odd[j], cname) ;
                         break ;
                     case SQL_BIT:
-                        desz[j] = 1 ;
                         outputTypes.addBool(cname) ;
                         break ;
                     case SQL_BINARY:
@@ -835,7 +825,6 @@ class DBLinkFactory : public TransformFunctionFactory, ODBCBase
                             srvInterface.log("DBLINK SQL_BINARY column %s of length %zu limited to 65000 bytes", (char *)Ocname, Ors[j]);
                             Ors[j] = 65000;
                         }
-                        desz[j] = (size_t)(Ors[j] + 1) ;
                         outputTypes.addBinary((int32)Ors[j], cname) ;
                         break ;
                     case SQL_VARBINARY:
@@ -843,7 +832,6 @@ class DBLinkFactory : public TransformFunctionFactory, ODBCBase
                             srvInterface.log("DBLINK SQL_VARBINARY column %s of length %zu limited to 65000 bytes", (char *)Ocname, Ors[j]);
                             Ors[j] = 65000;
                         }
-                        desz[j] = (size_t)(Ors[j] + 1) ;
                         outputTypes.addVarbinary((int32)Ors[j], cname) ;
                         break ;
                     case SQL_LONGVARBINARY:
@@ -851,15 +839,12 @@ class DBLinkFactory : public TransformFunctionFactory, ODBCBase
                             srvInterface.log("DBLINK SQL_LONGVARBINARY column %s of length %zu limited to 32000000 bytes", (char *)Ocname, Ors[j]);
                             Ors[j] = 32000000;
                         }
-                        desz[j] = (size_t)(Ors[j] + 1) ;
                         outputTypes.addLongVarbinary((int32)Ors[j], cname) ;
                         break ;
                     case SQL_INTERVAL_YEAR_TO_MONTH:
-                        desz[j] = sizeof(SQL_INTERVAL_STRUCT) ;
                         outputTypes.addIntervalYM(INTERVAL_YEAR2MONTH, cname) ;
                         break ;
                     case SQL_INTERVAL_DAY_TO_SECOND:
-                        desz[j] = sizeof(SQL_INTERVAL_STRUCT) ;
                         outputTypes.addInterval((int32)Odd[j], INTERVAL_DAY2SECOND, cname) ;
                         break ;
                     default:
