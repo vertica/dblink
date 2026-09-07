@@ -151,6 +151,11 @@ DBLINK(USING PARAMETERS cid=value, query=value[, rowset=value]);
 | `connect_secret` | No      | The ODBC connection string containing the DSN and credentials. |
 | `query`  | Yes      | The query being pushed on the remote database. If the first character of this parameter is `@`, the rest is interpreted as the name of the file containing the query. |
 | `rowset` | No      | Number of rows retrieved from the remote database during each SQLFetch() cycle. Default is 100. |
+| `num_threads` | No | Number of parallel fetch threads, from 1 to 16. Default is 1 (no parallelism). Values above 1 require `split_column` and are ignored for non-`SELECT` statements. |
+| `split_column` | No | Integer column of the query used to split the work between the fetch threads. Must be a plain unquoted identifier. Rows where it is `NULL` are fetched by the first thread. |
+| `split_min` | No | Lower bound of `split_column`. When `split_min` and `split_max` are both given the remote `MIN()`/`MAX()` lookup is skipped. |
+| `split_max` | No | Upper bound of `split_column`. |
+| `max_buffer_mb` | No | Memory budget in MB for the parallel fetch buffers, from 16 to 8192. Default is 512. The thread count or the queue depth is reduced to stay within it. |
 
 For example, the following query retrieves data from the remote database 500 rows at a time:
 
@@ -170,6 +175,39 @@ For example, the following query retrieves data from the remote database 500 row
          7 |          18 | 28-190-982-9759
 ...
 ```
+#### Parallel fetch
+
+Setting `num_threads` above 1 together with `split_column` makes DBLINK open one
+remote connection per thread, each fetching a disjoint range of `split_column`
+between its minimum and maximum values, all feeding a single writer. For example:
+
+```sql
+=> SELECT DBLINK(USING PARAMETERS
+    cid='pgdb',
+    query='SELECT c_custkey, c_nationkey, c_phone FROM tpch.customer',
+    split_column='c_custkey',
+    num_threads=4) OVER();
+```
+
+Parallel mode has the following constraints:
+
+* Row order is not preserved when `num_threads` is greater than 1, so it must not be
+  combined with a remote `ORDER BY` when the order matters.
+* Each range runs on its own connection and therefore on its own transaction, so the
+  ranges do not share a single snapshot. Use parallel mode on stable or read-mostly
+  data.
+* Queries containing volatile expressions such as `NOW()` or random functions, or
+  depending on remote session state, must not be used with `num_threads` greater
+  than 1.
+* Ranges are equal-width between `MIN(split_column)` and `MAX(split_column)`, so a
+  very skewed split column gives uneven work between the threads.
+* Each thread opens one additional remote connection. Size `num_threads` multiplied
+  by the expected number of concurrent DBLINK queries against the CPU core count and
+  the connection limit of the remote database.
+
+If `split_column` does not yield integer bounds, or the statement is not a `SELECT`,
+DBLINK logs the reason and falls back to the single-threaded fetch.
+
 #### Connection parameters
 ##### Connection Identifier Database
 

@@ -1,5 +1,6 @@
 CXX = g++
-CXXFLAGS = -O3 -D HAVE_LONG_INT_64 -Wall -std=c++11 -shared -Wno-unused-value -DODBC64 -D_GLIBCXX_USE_CXX11_ABI=0 -fPIC 
+VERTICA_CXX11_ABI ?= 1
+CXXFLAGS = -O3 -D HAVE_LONG_INT_64 -Wall -std=c++11 -shared -Wno-unused-value -DODBC64 -D_GLIBCXX_USE_CXX11_ABI=$(VERTICA_CXX11_ABI) -fPIC -pthread
 INCPATH = -I/opt/vertica/sdk/include -I/opt/vertica/sdk/examples/HelperLibraries
 VERPATH = /opt/vertica/sdk/include/Vertica.cpp
 UDXLIBNAME = ldblink
