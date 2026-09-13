@@ -155,7 +155,9 @@ DBLINK(USING PARAMETERS cid=value, query=value[, rowset=value]);
 | `split_column` | No | Integer column of the query used to split the work between the fetch threads. Must be a plain unquoted identifier. Rows where it is `NULL` are fetched by the first thread. |
 | `split_min` | No | Lower bound of `split_column`. When `split_min` and `split_max` are both given the remote `MIN()`/`MAX()` lookup is skipped. |
 | `split_max` | No | Upper bound of `split_column`. |
-| `max_buffer_mb` | No | Memory budget in MB for the parallel fetch buffers, from 16 to 8192. Default is 512. The thread count or the queue depth is reduced to stay within it. |
+| `max_buffer_mb` | No | Fetch buffer budget in MB for this DBLINK call, from 16 to 8192. Default is 256. The thread count or the queue depth is reduced to stay within it. |
+| `max_total_buffer_mb` | No | Fetch buffer ceiling in MB shared by every DBLINK call running in the same UDx process, from 64 to 65536. Default is 4096. |
+| `query_timeout` | No | Seconds a remote statement may run before DBLINK cancels it, from 0 to 86400. Default is 0, meaning unlimited. |
 
 For example, the following query retrieves data from the remote database 500 rows at a time:
 
@@ -200,10 +202,42 @@ Parallel mode has the following constraints:
   depending on remote session state, must not be used with `num_threads` greater
   than 1.
 * Ranges are equal-width between `MIN(split_column)` and `MAX(split_column)`, so a
-  very skewed split column gives uneven work between the threads.
+  very skewed split column gives uneven work between the threads. The lowest and the
+  highest ranges are open ended and the lowest one also collects the rows where
+  `split_column` is `NULL`, so no row is lost if the bounds are stale or if rows are
+  inserted while the fetch runs.
 * Each thread opens one additional remote connection. Size `num_threads` multiplied
   by the expected number of concurrent DBLINK queries against the CPU core count and
   the connection limit of the remote database.
+
+#### Memory used by parallel fetch
+
+`max_buffer_mb` is a **per invocation** budget. Every concurrent DBLINK call has its own,
+and Vertica's resource manager does not account for them. The calls running in the same UDx
+process therefore also share the `max_total_buffer_mb` ceiling: a call that cannot reserve
+its share logs the fact and falls back to a single-threaded fetch instead of overcommitting
+the process. Install the library **FENCED** for concurrent workloads, so that this memory is
+spent in the UDx side process rather than inside the Vertica server process.
+
+#### Timeouts
+
+There is no `login_timeout` parameter. It existed briefly and was removed: the Vertica ODBC
+driver does **not** honour `SQL_ATTR_LOGIN_TIMEOUT` or `SQL_ATTR_CONNECTION_TIMEOUT`, so the
+parameter only gave false assurance. Connecting to an unreachable host is bounded by the
+**operating system TCP timeout** (roughly two minutes on a default Linux), not by anything
+DBLINK can set. To bound it:
+
+* list a reachable alternative with `BackupServerNode` in the DSN, so the driver fails over
+  instead of waiting,
+* tune the Linux TCP socket timeouts on the Vertica nodes,
+* and install DBLINK **fenced**, since Vertica caps a fenced UDx at about 60 seconds.
+
+`query_timeout` (default 0, unlimited) bounds a slow or overloaded remote statement. Because
+the driver also ignores `SQL_ATTR_QUERY_TIMEOUT`, DBLINK enforces it with a watchdog thread
+that calls `SQLCancel()` on the statement, which is the interrupt Vertica documents and the
+one that actually works. It covers the statements that read the remote data, in both serial
+and parallel fetch, and each fetch thread watches its own statement. A cancelled statement is
+reported as an error; it never returns a silently truncated result.
 
 If `split_column` does not yield integer bounds, or the statement is not a `SELECT`,
 DBLINK logs the reason and falls back to the single-threaded fetch.

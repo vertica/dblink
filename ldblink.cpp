@@ -27,7 +27,9 @@ using namespace std;
 #include <atomic>
 #include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
@@ -44,9 +46,14 @@ using namespace std;
 #define MAX_ROWSET 			1000							// Default rowset
 #define DEF_THREADS			1								// Default number of fetch threads
 #define MAX_THREADS			16								// Max number of fetch threads
-#define DEF_BUFFER_MB		512								// Default parallel fetch buffer budget
-#define MIN_BUFFER_MB		16								// Min parallel fetch buffer budget
-#define MAX_BUFFER_MB		8192							// Max parallel fetch buffer budget
+#define DEF_BUFFER_MB		256								// Default per invocation fetch buffer budget
+#define MIN_BUFFER_MB		16								// Min per invocation fetch buffer budget
+#define MAX_BUFFER_MB		8192							// Max per invocation fetch buffer budget
+#define DEF_TOTAL_BUFFER_MB	4096							// Default process wide fetch buffer ceiling
+#define MIN_TOTAL_BUFFER_MB	64								// Min process wide fetch buffer ceiling
+#define MAX_TOTAL_BUFFER_MB	65536							// Max process wide fetch buffer ceiling
+#define DEF_QUERY_TIMEOUT	0								// Default statement timeout, 0 = unlimited
+#define MAX_QUERY_TIMEOUT	86400							// Max statement timeout in seconds
 #define MAX_NUMERIC_CHARLEN 128								// Max NUMERIC size in characters
 #define MAX_ODBC_ERROR_LEN  1024							// Max ODBC Error Length
 
@@ -75,9 +82,11 @@ struct OdbcState {
 	SQLULEN *Ors ;				// Result Set Column size pointer
 	size_t *desz ;				// Data Element Size Array pointer
 	SQLULEN nfr ;				// Number of fetched rows
+	vint query_timeout ;		// Statement timeout in seconds, 0 = unlimited
 
 	OdbcState() : Oenv(0), Ocon(0), Ost(0), is_select(false), query(""),
-		Oncol(0), Odt(0), Odd(0), Ors(0), desz(0), nfr(0) {}
+		Oncol(0), Odt(0), Odd(0), Ors(0), desz(0), nfr(0),
+		query_timeout(DEF_QUERY_TIMEOUT) {}
 
 	~OdbcState() { clean() ; }
 
@@ -281,6 +290,94 @@ public:
 	}
 };
 
+// Process wide fetch buffer accounting. Several DBLINK() calls share one UDx process and
+// the Vertica resource manager cannot see these buffers, so they are tracked cooperatively.
+static std::atomic<uint64_t> g_dblink_bytes_inflight(0) ;
+
+// Reserves as much of "want" as the ceiling allows but never less than "floor_bytes".
+// Returns the granted amount, or 0 when not even "floor_bytes" fits.
+static uint64_t reserve_buffers ( uint64_t want, uint64_t floor_bytes, uint64_t ceiling )
+{
+	uint64_t inflight = g_dblink_bytes_inflight.load() ;
+
+	for ( ; ; ) {
+		uint64_t room = ( ceiling > inflight ) ? ( ceiling - inflight ) : 0 ;
+		uint64_t grant = ( want < room ) ? want : room ;
+		if ( grant < floor_bytes )
+			return 0 ;
+		if ( g_dblink_bytes_inflight.compare_exchange_weak(inflight, inflight + grant) )
+			return grant ;
+	}
+}
+
+struct BufferReservation {
+	uint64_t bytes ;
+
+	BufferReservation() : bytes(0) {}
+	~BufferReservation() { release() ; }
+
+	BufferReservation ( const BufferReservation & ) = delete ;
+	BufferReservation &operator= ( const BufferReservation & ) = delete ;
+
+	void hold ( uint64_t n ) {
+		release() ;
+		bytes = n ;
+	}
+
+	// Idempotent
+	void release() {
+		if ( bytes ) {
+			g_dblink_bytes_inflight.fetch_sub(bytes) ;
+			bytes = 0 ;
+		}
+	}
+};
+
+// Interrupts a remote statement that runs for longer than query_timeout. The Vertica ODBC
+// driver ignores SQL_ATTR_QUERY_TIMEOUT, so the timeout is enforced with SQLCancel(), the
+// only interrupt the driver honours on a statement in progress.
+class StmtCancelTimer {
+
+	SQLHSTMT hstmt ;
+	std::thread timer ;
+	std::mutex tmutex ;
+	std::condition_variable tcv ;
+	std::atomic<bool> fired_flag ;
+	bool done ;
+
+public:
+
+	StmtCancelTimer ( SQLHSTMT h, int secs ) : hstmt(h), fired_flag(false), done(false) {
+		if ( secs <= 0 )
+			return ;
+		timer = std::thread([this, secs] {
+			std::unique_lock<std::mutex> guard(tmutex) ;
+			if ( !tcv.wait_for(guard, std::chrono::seconds(secs), [this]{ return done ; }) ) {
+				fired_flag.store(true) ;
+				(void)SQLCancel(hstmt) ;
+			}
+		}) ;
+	}
+
+	~StmtCancelTimer() { stop() ; }
+
+	StmtCancelTimer ( const StmtCancelTimer & ) = delete ;
+	StmtCancelTimer &operator= ( const StmtCancelTimer & ) = delete ;
+
+	bool fired() const { return fired_flag.load() ; }
+
+	// Idempotent, and always joins before the caller can free the statement handle
+	void stop() {
+		{
+			std::lock_guard<std::mutex> guard(tmutex) ;
+			done = true ;
+		}
+		tcv.notify_all() ;
+		if ( timer.joinable() )
+			timer.join() ;
+	}
+};
+
 // Strict integer conversion: rejects empty, partial, out of range and trailing garbage
 static bool parse_bound ( const char *s, vint &out )
 {
@@ -386,6 +483,13 @@ void get_connection_info ( ServerInterface &srvInterface, OdbcState &st, std::st
 #endif
 	} else {
 		vt_report_error(102, "DBLINK. Missing query parameter");
+	}
+
+	// Both the planning connection and the instance connection need this
+	if( params.containsParameter("query_timeout") ) {
+		st.query_timeout = params.getIntRef("query_timeout") ;
+		if ( st.query_timeout < 0 || st.query_timeout > MAX_QUERY_TIMEOUT )
+			vt_report_error(213, "DBLINK. Error query_timeout out of range");
 	}
 
 	// Check connection parameters
@@ -635,7 +739,9 @@ void describe_result_set ( ServerInterface &srvInterface, OdbcState &st, SizedCo
 	}
 }
 
-// Open the environment, connection and statement handles held by "st"
+// Open the environment, connection and statement handles held by "st". The Vertica ODBC
+// driver ignores the login and connection timeout attributes, so reaching a dead host is
+// bounded by the OS TCP timeout only: tune the socket timeouts or use BackupServerNode.
 void odbc_connect ( OdbcState &st, const std::string &cid_value )
 {
 	SQLRETURN Oret = 0 ;
@@ -761,12 +867,14 @@ class DBLink : public TransformFunction
 	vint split_min ;
 	vint split_max ;
 	size_t max_buffer_mb ;		// Budget for the parallel fetch buffers
+	size_t max_total_buffer_mb ;// Process wide ceiling shared by every DBLINK() call
 	bool parallel ;				// Parallel fetch possible and requested
 	std::string conn_str ;		// Connection string reused by the fetch threads
 	BatchQueue queue ;
 	std::vector<std::thread> producers ;
 	std::vector<std::string> producerErr ;	// One slot per producer, read after joining
 	std::vector<SQLHSTMT> producerStmts ;	// Live producer statements, guarded by handleMutex
+	BufferReservation reservation ;			// Released once the producers are joined
 
 	// Keeps a producer statement reachable from cancel() for as long as it is fetching
 	class StmtGuard {
@@ -807,6 +915,7 @@ class DBLink : public TransformFunction
 		}
 		producers.clear() ;
 		queue.drain() ;
+		reservation.release() ;
 	}
 
 	virtual void setup(ServerInterface &srvInterface, const SizedColumnTypes &argTypes)
@@ -868,6 +977,14 @@ class DBLink : public TransformFunction
 				ex_err(0, 0, 205, "DBLINK. Error max_buffer_mb out of range");
 			} else {
 				max_buffer_mb = (size_t) buffer_param ;
+			}
+		}
+		if( params.containsParameter("max_total_buffer_mb") ) {
+			vint total_param = params.getIntRef("max_total_buffer_mb") ;
+			if ( total_param < MIN_TOTAL_BUFFER_MB || total_param > MAX_TOTAL_BUFFER_MB ) {
+				ex_err(0, 0, 206, "DBLINK. Error max_total_buffer_mb out of range");
+			} else {
+				max_total_buffer_mb = (size_t) total_param ;
 			}
 		}
 		if( params.containsParameter("split_column") ) {
@@ -952,14 +1069,28 @@ class DBLink : public TransformFunction
 		SQLULEN pnfr = 0 ;
 		SQLSMALLINT pncol = 0 ;
 		const unsigned int ncol = (unsigned int)odbc.Oncol ;
-		std::string pquery = "SELECT * FROM ( " + odbc.query + " ) dblink_split_src WHERE ( " +
-			split_column + " >= " + std::to_string((long long)lo) + " AND " +
-			split_column + ( last ? " <= " : " < " ) + std::to_string((long long)hi) + " )" ;
+		std::string pquery = "SELECT * FROM ( " + odbc.query + " ) dblink_split_src" ;
+		std::string pred = "" ;
 
-		// The range predicate is UNKNOWN for NULL split values: producer 0 owns that partition
-		if ( idx == 0 )
-			pquery += " OR " + split_column + " IS NULL" ;
+		// The outer partitions are deliberately unbounded so that the ranges together cover
+		// every value: stale MIN/MAX bounds or rows inserted while the fetch runs would
+		// otherwise be returned by no thread at all. Producer 0 also owns the NULL
+		// partition, since the range predicate is UNKNOWN for a NULL split value.
+		if ( idx == 0 && last ) {
+			pred = "" ;
+		} else if ( idx == 0 ) {
+			pred = "( " + split_column + " < " + std::to_string((long long)hi) + " ) OR " +
+				split_column + " IS NULL" ;
+		} else if ( last ) {
+			pred = split_column + " >= " + std::to_string((long long)lo) ;
+		} else {
+			pred = split_column + " >= " + std::to_string((long long)lo) + " AND " +
+				split_column + " < " + std::to_string((long long)hi) ;
+		}
+		if ( !pred.empty() )
+			pquery += " WHERE " + pred ;
 
+		pst.query_timeout = odbc.query_timeout ;
 		if ( !odbc_connect_nothrow(pst, conn_str, producerErr[idx]) )
 			return ;
 
@@ -980,8 +1111,13 @@ class DBLink : public TransformFunction
 			producerErr[idx] = odbc_diag(SQL_HANDLE_STMT, pst.Ost, "Error setting statement attribute SQL_ATTR_ROWS_FETCHED_PTR") ;
 			return ;
 		}
+		// Each producer watches its own statement, and the timer is always joined before
+		// pst frees the handle it would cancel
+		StmtCancelTimer wdog(pst.Ost, (int)odbc.query_timeout) ;
+
 		if (!SQL_SUCCEEDED(Oret=SQLExecDirect(pst.Ost, (SQLCHAR *)pquery.c_str(), SQL_NTS)) && Oret != SQL_NO_DATA ) {
-			producerErr[idx] = odbc_diag(SQL_HANDLE_STMT, pst.Ost, "Error executing the statement") ;
+			producerErr[idx] = wdog.fired() ? "Remote statement canceled: query_timeout exceeded"
+				: odbc_diag(SQL_HANDLE_STMT, pst.Ost, "Error executing the statement") ;
 			return ;
 		}
 
@@ -1011,7 +1147,11 @@ class DBLink : public TransformFunction
 				}
 			}
 			if (!SQL_SUCCEEDED(Oret=SQLFetchScroll(pst.Ost, SQL_FETCH_NEXT, 0))) {
-				if ( Oret != SQL_NO_DATA )
+				// A cancelled statement surfaces as HY008 or as an empty fetch: either way the
+				// result set is incomplete and must be reported instead of silently truncated
+				if ( wdog.fired() )
+					producerErr[idx] = "Remote fetch canceled: query_timeout exceeded" ;
+				else if ( Oret != SQL_NO_DATA )
 					producerErr[idx] = odbc_diag(SQL_HANDLE_STMT, pst.Ost, "Error fetching from the remote database") ;
 				return ;
 			}
@@ -1036,8 +1176,10 @@ class DBLink : public TransformFunction
 
 	// Parallel fetch: num_threads producers, each on its own connection, feeding this
 	// thread. Row order is NOT preserved, so num_threads > 1 must not be used when the
-	// remote query relies on ORDER BY.
-	void parallelFetch ( ServerInterface &srvInterface, PartitionWriter &outputWriter )
+	// remote query relies on ORDER BY. Returns false when the process wide buffer budget
+	// cannot cover even a minimal parallel fetch, in which case nothing has been started
+	// and the caller must use the single threaded path.
+	bool parallelFetch ( ServerInterface &srvInterface, PartitionWriter &outputWriter )
 	{
 		const unsigned int ncol = (unsigned int)odbc.Oncol ;
 		size_t nthr = num_threads ;
@@ -1048,6 +1190,9 @@ class DBLink : public TransformFunction
 		uint64_t inflight = 0 ;
 		uint64_t remaining = 0 ;
 		uint64_t cap = 0 ;
+		uint64_t want_bytes = 0 ;
+		uint64_t floor_bytes = 0 ;
+		uint64_t granted = 0 ;
 		uint64_t span = (uint64_t)split_max - (uint64_t)split_min ;
 		uint64_t step = 0 ;
 		uint64_t rem = 0 ;
@@ -1087,8 +1232,33 @@ class DBLink : public TransformFunction
 			cap = 2 * (uint64_t)nthr ;
 		if ( cap < 1 )
 			cap = 1 ;
-		srvInterface.log("DBLINK. Parallel fetch: %lld bytes per batch, %d threads requested, %d used, queue depth %d, budget %d MB",
-			(long long)bytes_per_batch, (int)num_threads, (int)nthr, (int)cap, (int)max_buffer_mb);
+
+		// max_buffer_mb is per invocation: charge the footprint against the process wide
+		// ceiling too, otherwise N concurrent DBLINK() calls would multiply it
+		want_bytes = ( (uint64_t)nthr + 1 + 2 * cap ) * bytes_per_batch ;
+		floor_bytes = 4 * bytes_per_batch ;	// one thread, queue depth one
+		granted = reserve_buffers(want_bytes, floor_bytes,
+			(uint64_t)max_total_buffer_mb * 1024 * 1024) ;
+		if ( granted == 0 ) {
+			srvInterface.log("DBLINK. Parallel fetch needs %lld bytes, the process wide budget of %d MB is exhausted: fetching with a single thread",
+				(long long)floor_bytes, (int)max_total_buffer_mb);
+			return false ;
+		}
+		reservation.hold(granted) ;
+		if ( granted < want_bytes ) {
+			uint64_t batches = granted / bytes_per_batch ;
+			uint64_t max_thr = batches - 3 ;	// leaves room for a queue depth of one
+			if ( (uint64_t)nthr > max_thr )
+				nthr = (size_t)max_thr ;
+			cap = ( batches - (uint64_t)nthr - 1 ) / 2 ;
+			if ( cap > 2 * (uint64_t)nthr )
+				cap = 2 * (uint64_t)nthr ;
+			if ( cap < 1 )
+				cap = 1 ;
+		}
+		srvInterface.log("DBLINK. Parallel fetch: %lld bytes per batch, %d threads requested, %d used, queue depth %d, budget %d MB, reserved %lld of %lld bytes against a %d MB process wide ceiling",
+			(long long)bytes_per_batch, (int)num_threads, (int)nthr, (int)cap, (int)max_buffer_mb,
+			(long long)granted, (long long)want_bytes, (int)max_total_buffer_mb);
 
 		step = span / (uint64_t)nthr ;
 		rem = span % (uint64_t)nthr ;
@@ -1131,12 +1301,13 @@ class DBLink : public TransformFunction
 
 		// A cancelled fetch reports HY008: Vertica is already tearing the query down
 		if ( cancelled.load() )
-			return ;
+			return true ;
 
 		for ( size_t i = 0 ; i < producerErr.size() ; i++ ) {
 			if ( !producerErr[i].empty() )
 				vt_report_error(409, "DBLINK. Fetch thread %d. %s", (int)i, producerErr[i].c_str());
 		}
+		return true ;
 	}
 
     virtual void destroy(ServerInterface &srvInterface, const SizedColumnTypes &argTypes)
@@ -1266,11 +1437,11 @@ class DBLink : public TransformFunction
 
 		try
 		{
-			if ( odbc.is_select && parallel ) {
+			// parallelFetch() declines before starting anything when the process wide
+			// buffer budget is exhausted: the single threaded path below then runs
+			bool fetched = ( odbc.is_select && parallel && parallelFetch(srvInterface, outputWriter) ) ;
 
-				parallelFetch(srvInterface, outputWriter) ;
-
-			} else if ( odbc.is_select ) {
+			if ( odbc.is_select && !fetched ) {
 
 				// Allocate memory for Result Set and length array pointers:
 				Ores = (SQLPOINTER *)srvInterface.allocator->alloc(Oncol * sizeof(SQLPOINTER)) ;
@@ -1366,6 +1537,10 @@ class DBLink : public TransformFunction
 					ex_err(SQL_HANDLE_STMT, Ost, 402, "Error setting statement attribute SQL_ATTR_ROWS_FETCHED_PTR");
 				}
 
+				// The watchdog scope ends with the fetch loop, so the timer is joined well
+				// before closeHandles() can free the statement it would cancel
+				StmtCancelTimer wdog(Ost, (int)odbc.query_timeout) ;
+
 				// Execute Stateent:
 				if (!SQL_SUCCEEDED(Oret=SQLExecute(Ost)) && Oret != SQL_NO_DATA ) {
 					ex_err(SQL_HANDLE_STMT, Ost, 403, "Error executing the statement");
@@ -1386,7 +1561,12 @@ class DBLink : public TransformFunction
 						}
 					}
 				}
-			} else {
+				if ( wdog.fired() ) {
+					ex_err(0, 0, 410, "Remote statement canceled: query_timeout exceeded");
+				}
+			} else if ( !odbc.is_select ) {
+				StmtCancelTimer wdog(Ost, (int)odbc.query_timeout) ;
+
 				if (!SQL_SUCCEEDED(Oret=SQLExecDirect (Ost, (SQLCHAR *)odbc.query.c_str(), SQL_NTS))) {
 					ex_err(SQL_HANDLE_STMT, Ost, 408, "Error executing statement");
 				}
@@ -1407,7 +1587,7 @@ public:
 
 	DBLink() : dbt(GENERIC), Ores(0), Olen(0), rowset(DEF_ROWSET), cancelled(false),
 		num_threads(DEF_THREADS), split_min(0), split_max(0), max_buffer_mb(DEF_BUFFER_MB),
-		parallel(false) {}
+		max_total_buffer_mb(DEF_TOTAL_BUFFER_MB), parallel(false) {}
 
 	virtual ~DBLink() { joinProducers() ; closeHandles() ; }
 };
@@ -1453,7 +1633,9 @@ class DBLinkFactory : public TransformFunctionFactory
 		parameterTypes.addVarchar(1024, "split_column",  { true, false, false, "Integer column of the query the parallel fetch threads split their range on." });
 		parameterTypes.addInt("split_min",  { true, false, false, "Lower bound of split_column. Default is MIN(split_column) read from the remote database." });
 		parameterTypes.addInt("split_max",  { true, false, false, "Upper bound of split_column. Default is MAX(split_column) read from the remote database." });
-		parameterTypes.addInt("max_buffer_mb",  { true, false, false, "Memory budget in MB for parallel fetch buffers, 16 to 8192. Default 512. Threads or queue depth are reduced to fit." });
+		parameterTypes.addInt("max_buffer_mb",  { true, false, false, "Fetch buffer budget in MB for this call, 16 to 8192. Default 256. Threads or queue depth are reduced to fit." });
+		parameterTypes.addInt("max_total_buffer_mb",  { true, false, false, "Fetch buffer ceiling in MB shared by all DBLINK calls in the process, 64 to 65536. Default 4096." });
+		parameterTypes.addInt("query_timeout",  { true, false, false, "Seconds a remote statement may run before it is cancelled, 0 to 86400. Default 0, meaning unlimited." });
 	}
 
 	virtual TransformFunction *createTransformFunction( ServerInterface &srvInterface )
