@@ -19,7 +19,7 @@ endif
 endif
 
 CXX = g++
-CXXFLAGS = -O3 -D HAVE_LONG_INT_64 -Wall -std=c++11 -shared -Wno-unused-value -DODBC64 -D_GLIBCXX_USE_CXX11_ABI=0 -fPIC
+CXXFLAGS = -O3 -D HAVE_LONG_INT_64 -Wall -std=c++11 -shared -Wno-unused-value -DODBC64 -D_GLIBCXX_USE_CXX11_ABI=0 -fPIC -pthread
 UDXLIBNAME = ldblink
 UDXSRC = $(REPO_DIR)/$(UDXLIBNAME).cpp
 UDXLIB = $(CURRENT_DIR)/$(UDXLIBNAME).so
